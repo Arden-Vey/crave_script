@@ -9,5 +9,3 @@ crave run --no-patch -- "curl -v https://raw.githubusercontent.com/Arden-Vey/cra
 ```
 crave run --no-patch -- "curl -v https://raw.githubusercontent.com/Arden-Vey/crave_script/main/lineage_tissot_check&build.sh | bash"
 ```
-
-• I was inspired by https://github.com/DarkKiller28
