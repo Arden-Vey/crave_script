@@ -7,5 +7,5 @@ crave run --no-patch -- "curl -v https://raw.githubusercontent.com/Arden-Vey/cra
 
 • lineage_tissot_check&build 16.2
 ```
-crave run --no-patch -- "curl -v https://raw.githubusercontent.com/Arden-Vey/crave_script/main/lineage_tissot_check&build.sh | bash"
+crave run --no-patch -- "curl -v https://raw.githubusercontent.com/Arden-Vey/crave_script/main/lineage-build.sh | bash"
 ```
