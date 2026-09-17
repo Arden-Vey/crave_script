@@ -55,7 +55,7 @@ mka bacon
 # Copy images
 mkdir -p imgs_output
 
-for img in boot.img system.img vendor.img; do
+for img in boot.img system.img; do
     if [ -f "out/target/product/tissot_mainline/$img" ]; then
         cp "out/target/product/tissot_mainline/$img" imgs_output/
         echo "Copied: $img"
