@@ -84,7 +84,7 @@ echo "======================================"
 # Ubah target ini kalau hasil pengecekan di atas menunjukkan
 # nama lunch yang berbeda.
 #
-lunch lineage_gsi_arm64-userdebug
+lunch lineage_Generic_arm64-userdebug
 
 echo "=================="
 echo "Lunch success"
