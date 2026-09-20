@@ -21,7 +21,7 @@ ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
 
 DEVICE="Generic_arm64"
-LUNCH_TARGET="lineage_Generic_arm64-userdebug"
+LUNCH_TARGET=""
 
 MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
 MANIFEST_BRANCH="generic"
@@ -53,7 +53,7 @@ banner() {
     echo "║                                                                 ║"
     echo "╠═════════════════════════════════════════════════════════════════╣"
     echo "║  ROM        : LineageOS 23.2                                    ║"
-    echo "║  Device     : Generic ARM64                                     ║"
+    echo "║  Device     : Generic ARM64 GSI                                 ║"
     echo "║  Branch     : lineage-23.2                                      ║"
     echo "║  Build      : userdebug                                         ║"
     echo "╚═════════════════════════════════════════════════════════════════╝"
@@ -72,7 +72,7 @@ echo "--------------------------------------------"
 echo "ROM             : $ROM_NAME"
 echo "ROM branch      : $ROM_BRANCH"
 echo "Device          : $DEVICE"
-echo "Lunch target    : $LUNCH_TARGET"
+echo "Lunch target    : AUTO"
 echo "Manifest        : $MANIFEST_URL"
 echo "Manifest branch : $MANIFEST_BRANCH"
 echo "Output          : $OUT_DIR"
@@ -263,6 +263,130 @@ do
 done
 
 # ============================================================
+# AUTO DETECT LUNCH TARGET
+# ============================================================
+
+echo
+echo "============================================="
+echo "       detecting GSI lunch target"
+echo "============================================="
+
+PRODUCT_NAME="lineage_${DEVICE}"
+BUILD_VARIANT="userdebug"
+
+echo
+echo "Product : $PRODUCT_NAME"
+echo "Variant : $BUILD_VARIANT"
+echo
+
+# ------------------------------------------------------------
+# METHOD 1
+# Query all registered lunch combos
+# ------------------------------------------------------------
+
+echo "Searching registered lunch combinations..."
+
+LUNCH_TARGET=""
+
+if command -v lunch >/dev/null 2>&1; then
+
+    AVAILABLE_LUNCHES=""
+
+    # Modern Lineage/AOSP exposes --list.
+    AVAILABLE_LUNCHES=$(lunch --list 2>/dev/null || true)
+
+    # Search exact product + userdebug.
+    if [ -n "$AVAILABLE_LUNCHES" ]; then
+
+        LUNCH_TARGET=$(
+            printf '%s\n' "$AVAILABLE_LUNCHES" |
+            grep -E \
+                "^${PRODUCT_NAME}(-[^[:space:]]+)?-${BUILD_VARIANT}$" |
+            head -n 1 ||
+            true
+        )
+
+    fi
+
+fi
+
+# ------------------------------------------------------------
+# METHOD 2
+# Search product definitions directly
+# ------------------------------------------------------------
+
+if [ -z "$LUNCH_TARGET" ]; then
+
+    echo "Registered lunch list did not provide a match."
+    echo "Searching product definitions..."
+
+    LUNCH_TARGET=$(
+        grep -RhoE \
+            "${PRODUCT_NAME}(-[A-Za-z0-9_.-]+)?-${BUILD_VARIANT}" \
+            device \
+            vendor \
+            build \
+            2>/dev/null |
+        sort -u |
+        head -n 1 ||
+        true
+    )
+
+fi
+
+# ------------------------------------------------------------
+# METHOD 3
+# Search AndroidProducts.mk
+# ------------------------------------------------------------
+
+if [ -z "$LUNCH_TARGET" ]; then
+
+    echo "Searching AndroidProducts.mk..."
+
+    LUNCH_TARGET=$(
+        grep -RhoE \
+            "${PRODUCT_NAME}(-[A-Za-z0-9_.-]+)?-${BUILD_VARIANT}" \
+            device \
+            vendor \
+            2>/dev/null |
+        sort -u |
+        head -n 1 ||
+        true
+    )
+
+fi
+
+# ------------------------------------------------------------
+# Validate lunch target
+# ------------------------------------------------------------
+
+if [ -z "$LUNCH_TARGET" ]; then
+
+    echo
+    echo -e "${RED}[ERROR]${RESET} Unable to automatically detect lunch target."
+    echo
+    echo "Expected product : $PRODUCT_NAME"
+    echo "Expected variant : $BUILD_VARIANT"
+    echo
+    echo "Available Generic products:"
+    
+    if command -v lunch >/dev/null 2>&1; then
+        lunch --list 2>/dev/null |
+            grep -i "Generic_arm64" ||
+            true
+    fi
+
+    exit 1
+
+fi
+
+echo
+echo -e "${GREEN}[OK]${RESET} Lunch target detected:"
+echo
+echo -e "    ${CYAN}${BOLD}$LUNCH_TARGET${RESET}"
+echo
+
+# ============================================================
 # LUNCH
 # ============================================================
 
@@ -284,10 +408,26 @@ echo "============================================="
 echo "          checking build target"
 echo "============================================="
 
-echo "TARGET_PRODUCT : $(get_build_var TARGET_PRODUCT)"
-echo "TARGET_BUILD_VARIANT : $(get_build_var TARGET_BUILD_VARIANT)"
-echo "TARGET_ARCH : $(get_build_var TARGET_ARCH)"
+echo "TARGET_PRODUCT      : $(get_build_var TARGET_PRODUCT)"
+echo "TARGET_BUILD_VARIANT: $(get_build_var TARGET_BUILD_VARIANT)"
+echo "TARGET_ARCH         : $(get_build_var TARGET_ARCH)"
 echo "TARGET_ARCH_VARIANT : $(get_build_var TARGET_ARCH_VARIANT)"
+
+# ============================================================
+# VERIFY DEVICE
+# ============================================================
+
+echo
+echo "============================================="
+echo "             verifying device"
+echo "============================================="
+
+DETECTED_PRODUCT="$(get_build_var TARGET_PRODUCT)"
+DETECTED_DEVICE="$(get_build_var TARGET_DEVICE)"
+
+echo "Expected product : $PRODUCT_NAME"
+echo "Detected product : $DETECTED_PRODUCT"
+echo "Detected device  : $DETECTED_DEVICE"
 
 # ============================================================
 # LIBJXL DEBUG
@@ -524,6 +664,10 @@ echo "============================================================"
 echo
 echo -e "${GREEN}${BOLD}ROM:${RESET} $ROM_NAME"
 echo -e "${GREEN}${BOLD}DEVICE:${RESET} $DEVICE"
+
+echo
+echo "Lunch:"
+echo "$LUNCH_TARGET"
 
 echo
 echo "ZIP:"
