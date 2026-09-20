@@ -2,113 +2,153 @@
 set -e
 
 # ============================================================
+# COLORS
+# ============================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+# ============================================================
 # CONFIG
 # ============================================================
 
-MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
-MANIFEST_BRANCH="main"
-
+ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
 
 DEVICE="tissot_mainline"
 LUNCH_TARGET="lineage_tissot_mainline-trunk_staging-userdebug"
 
+MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
+MANIFEST_BRANCH="main"
+
+BUILD_USERNAME="Arden-Vey"
+BUILD_HOSTNAME="crave"
+
+OUT_DIR="out/target/product/$DEVICE"
+
 # ============================================================
-# START
+# BANNER
+# ============================================================
+
+banner() {
+    clear
+
+    echo -e "${CYAN}${BOLD}"
+    echo "╔═════════════════════════════════════════════════════════════════╗"
+    echo "║                                                                 ║"
+    echo "║      ██╗     ██╗███╗   ██╗███████╗ █████╗  ██████╗ ███████╗    ║"
+    echo "║      ██║     ██║████╗  ██║██╔════╝██╔══██╗██╔════╝ ██╔════╝    ║"
+    echo "║      ██║     ██║██╔██╗ ██║█████╗  ███████║██║  ███╗█████╗      ║"
+    echo "║      ██║     ██║██║╚██╗██║██╔══╝  ██╔══██║██║   ██║██╔══╝      ║"
+    echo "║      ███████╗██║██║ ╚████║███████╗██║  ██║╚██████╔╝███████╗    ║"
+    echo "║      ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝    ║"
+    echo "║                                                                 ║"
+    echo "║                  T I S S O T   M A I N L I N E                  ║"
+    echo "║                Automated Release Builder                        ║"
+    echo "║                                                                 ║"
+    echo "╠═════════════════════════════════════════════════════════════════╣"
+    echo "║  ROM        : LineageOS 23.2                                    ║"
+    echo "║  Device     : tissot_mainline                                   ║"
+    echo "║  Branch     : lineage-23.2                                      ║"
+    echo "║  Build      : userdebug                                         ║"
+    echo "╚═════════════════════════════════════════════════════════════════╝"
+    echo -e "${RESET}"
+}
+
+banner
+
+# ============================================================
+# BUILD INFO
 # ============================================================
 
 echo
-echo "============================================================"
-echo "        LINEAGEOS 23.2 TISSOT MAINLINE BUILD"
-echo "============================================================"
-echo
-
-echo "ROM Branch    : $ROM_BRANCH"
-echo "Device        : $DEVICE"
-echo "Lunch Target  : $LUNCH_TARGET"
-echo "Manifest      : $MANIFEST_URL"
-echo "Manifest Branch: $MANIFEST_BRANCH"
+echo -e "${BLUE}${BOLD}Build configuration${RESET}"
+echo "--------------------------------------------"
+echo "ROM             : $ROM_NAME"
+echo "ROM branch      : $ROM_BRANCH"
+echo "Device          : $DEVICE"
+echo "Lunch target    : $LUNCH_TARGET"
+echo "Manifest        : $MANIFEST_URL"
+echo "Manifest branch : $MANIFEST_BRANCH"
+echo "Output          : $OUT_DIR"
 echo
 
 # ============================================================
-# CLEANUP LOCAL MANIFEST
+# CLEAN LOCAL MANIFEST
 # ============================================================
 
-echo "============================================================"
-echo "Cleaning local manifests"
-echo "============================================================"
+echo
+echo "============================================="
+echo "    cleaning up previous local manifests"
+echo "============================================="
 
 rm -rf .repo/local_manifests
 
-echo "Local manifests cleaned"
+echo -e "${GREEN}Local manifests cleaned.${RESET}"
 
 # ============================================================
 # REPO INIT
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Initializing LineageOS repository"
-echo "============================================================"
+echo "====================="
+echo "      repo init"
+echo "====================="
 
 repo init \
     -u https://github.com/LineageOS/android.git \
     -b "$ROM_BRANCH" \
-    --git-lfs \
-    --depth=1
+    --depth=1 \
+    --git-lfs
 
-echo
-echo "Repo init success"
+echo -e "${GREEN}repo init completed.${RESET}"
 
 # ============================================================
 # LOCAL MANIFEST
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Cloning Tissot local manifest"
-echo "============================================================"
+echo "========================"
+echo "   cloning manifest"
+echo "========================"
 
 git clone \
     -b "$MANIFEST_BRANCH" \
+    --depth=1 \
     "$MANIFEST_URL" \
     .repo/local_manifests
 
-echo
-echo "Local manifest clone success"
+echo -e "${GREEN}Local manifest cloned.${RESET}"
 
 # ============================================================
 # CRAVE SYNC
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Starting Crave repository sync"
-echo "============================================================"
+echo "==================="
+echo "     repo sync"
+echo "==================="
 
-if [ -x /opt/crave/resync.sh ]; then
-    /opt/crave/resync.sh
-else
-    echo "ERROR: /opt/crave/resync.sh tidak ditemukan"
-    exit 1
-fi
+/opt/crave/resync.sh
 
-echo
-echo "============================================================"
-echo "SYNC SUCCESS"
-echo "============================================================"
+echo -e "${GREEN}Repository sync completed.${RESET}"
 
 # ============================================================
-# BUILD ENVIRONMENT VARIABLES
+# BUILD ENVIRONMENT
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Exporting build environment"
-echo "============================================================"
+echo "=============================="
+echo "   build environment setup"
+echo "=============================="
 
-export BUILD_USERNAME="Arden-Vey"
-export BUILD_HOSTNAME="crave"
+export BUILD_USERNAME="$BUILD_USERNAME"
+export BUILD_HOSTNAME="$BUILD_HOSTNAME"
 
 export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
 export ALLOW_MISSING_DEPENDENCIES=true
@@ -119,315 +159,159 @@ echo "BUILD_USERNAME=$BUILD_USERNAME"
 echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
 echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
 echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
-echo "LC_ALL=$LC_ALL"
-
-echo
-echo "Build environment variables exported"
 
 # ============================================================
-# CHECK REPO STATUS
+# OPTIONAL DEVICE PROP
 # ============================================================
 
-echo
-echo "============================================================"
-echo "Checking repository status"
-echo "============================================================"
+PROP_FILE="device/xiaomi/mi89xx-mainline/props/product.prop"
 
 echo
-echo "Manifest:"
-echo "----------------------------------------"
+echo "============================================="
+echo "       checking product properties"
+echo "============================================="
 
-if [ -f .repo/manifest.xml ]; then
-    echo ".repo/manifest.xml found"
+if [ -f "$PROP_FILE" ]; then
+
+    echo "Found:"
+    echo "$PROP_FILE"
+
 else
-    echo "WARNING: .repo/manifest.xml tidak ditemukan"
+
+    echo -e "${YELLOW}WARNING:${RESET}"
+    echo "$PROP_FILE tidak ditemukan."
+    echo "Skipping property modification."
+
 fi
 
-echo
-echo "Local manifests:"
-echo "----------------------------------------"
-
-find .repo/local_manifests \
-    -maxdepth 2 \
-    -type f \
-    -print \
-    2>/dev/null || true
-
 # ============================================================
-# BUILD ENVIRONMENT
+# BUILD ENV
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Loading Android build environment"
-echo "============================================================"
+echo "=============================="
+echo "   loading build environment"
+echo "=============================="
 
 source build/envsetup.sh
 
-echo
-echo "Build environment ready"
+echo -e "${GREEN}Build environment loaded.${RESET}"
 
 # ============================================================
 # LUNCH
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Selecting lunch target"
-echo "============================================================"
+echo "===================="
+echo "       lunch"
+echo "===================="
 
 lunch "$LUNCH_TARGET"
 
-echo
-echo "============================================================"
-echo "LUNCH SUCCESS"
-echo "============================================================"
+echo -e "${GREEN}Lunch completed.${RESET}"
 
 # ============================================================
-# DEBUG LIBJXL
+# DEVICE CHECK
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Checking external/libjxl/Android.bp"
-echo "============================================================"
+echo "============================================="
+echo "          checking device tree"
+echo "============================================="
 
-if [ -f external/libjxl/Android.bp ]; then
-
-    echo
-    echo ">>> external/libjxl/Android.bp"
-    echo "----------------------------------------"
-
-    nl -ba external/libjxl/Android.bp | sed -n '1,80p'
-
+if [ -d "device/xiaomi/mi89xx-mainline" ]; then
+    echo -e "${GREEN}[OK]${RESET} device/xiaomi/mi89xx-mainline"
 else
-
-    echo
-    echo "WARNING:"
-    echo "external/libjxl/Android.bp tidak ditemukan"
-
+    echo -e "${RED}[ERROR]${RESET} device/xiaomi/mi89xx-mainline"
+    exit 1
 fi
 
 # ============================================================
-# DEBUG HIGHWAY
+# KERNEL CHECK
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Checking external/highway/Android.bp"
-echo "============================================================"
+echo "============================================="
+echo "          checking mainline kernel"
+echo "============================================="
 
-if [ -f external/highway/Android.bp ]; then
-
-    echo
-    echo ">>> external/highway/Android.bp"
-    echo "----------------------------------------"
-
-    nl -ba external/highway/Android.bp | sed -n '1,100p'
-
+if [ -d "kernel/mainline/msm8953-mainline" ]; then
+    echo -e "${GREEN}[OK]${RESET} kernel/mainline/msm8953-mainline"
 else
-
-    echo
-    echo "WARNING:"
-    echo "external/highway/Android.bp tidak ditemukan"
-
+    echo -e "${RED}[ERROR]${RESET} kernel/mainline/msm8953-mainline"
+    exit 1
 fi
 
 # ============================================================
-# CHECK LIBJXL REFERENCES
+# VENDOR CHECK
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Searching libjxl related properties"
-echo "============================================================"
+echo "============================================="
+echo "             checking vendor"
+echo "============================================="
 
-if [ -f external/libjxl/Android.bp ]; then
+if [ -d "vendor/xiaomi/tissot" ]; then
+    echo -e "${GREEN}[OK]${RESET} vendor/xiaomi/tissot"
+else
+    echo -e "${YELLOW}[WARNING]${RESET} vendor/xiaomi/tissot missing"
+fi
 
+if [ -d "vendor/xiaomi/msm8953-common" ]; then
+    echo -e "${GREEN}[OK]${RESET} vendor/xiaomi/msm8953-common"
+else
+    echo -e "${YELLOW}[WARNING]${RESET} vendor/xiaomi/msm8953-common missing"
+fi
+
+# ============================================================
+# LIBJXL DEBUG
+# ============================================================
+
+echo
+echo "============================================="
+echo "       checking external/libjxl"
+echo "============================================="
+
+if [ -f "external/libjxl/Android.bp" ]; then
+
+    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp"
+
+    echo
+    echo "Relevant properties:"
     grep -nE \
         'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
         external/libjxl/Android.bp \
         || true
 
+else
+
+    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp missing"
+
 fi
 
 # ============================================================
-# CHECK HIGHWAY REFERENCES
+# HIGHWAY DEBUG
 # ============================================================
 
 echo
-echo "============================================================"
-echo "Searching libhwy related properties"
-echo "============================================================"
+echo "============================================="
+echo "       checking external/highway"
+echo "============================================="
 
-if [ -f external/highway/Android.bp ]; then
+if [ -f "external/highway/Android.bp" ]; then
 
+    echo -e "${GREEN}[OK]${RESET} external/highway/Android.bp"
+
+    echo
+    echo "Relevant properties:"
     grep -nE \
         'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
         external/highway/Android.bp \
         || true
 
-fi
-
-# ============================================================
-# CHECK DUPLICATE KERNEL CONFIG PATH
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking kernel/mainline/configs references"
-echo "============================================================"
-
-if [ -f .repo/manifest.xml ]; then
-
-    DUPLICATE_CONFIGS=$(
-        grep -n \
-            'kernel/mainline/configs' \
-            .repo/manifest.xml \
-            || true
-    )
-
-    if [ -n "$DUPLICATE_CONFIGS" ]; then
-
-        echo
-        echo "WARNING: ditemukan kernel/mainline/configs"
-        echo
-        echo "$DUPLICATE_CONFIGS"
-
-    else
-
-        echo "Tidak ditemukan kernel/mainline/configs"
-
-    fi
-
 else
 
-    echo "WARNING: .repo/manifest.xml tidak ditemukan"
-
-fi
-
-# ============================================================
-# CHECK DEVICE TREE
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking device tree"
-echo "============================================================"
-
-if [ -d "device/xiaomi/mi89xx-mainline" ]; then
-
-    echo "Device tree:"
-    echo "device/xiaomi/mi89xx-mainline"
-
-else
-
-    echo "WARNING:"
-    echo "device/xiaomi/mi89xx-mainline tidak ditemukan"
-
-fi
-
-# ============================================================
-# CHECK KERNEL
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking mainline kernel"
-echo "============================================================"
-
-if [ -d "kernel/mainline/msm8953-mainline" ]; then
-
-    echo "Kernel:"
-    echo "kernel/mainline/msm8953-mainline"
-
-else
-
-    echo "WARNING:"
-    echo "kernel/mainline/msm8953-mainline tidak ditemukan"
-
-fi
-
-# ============================================================
-# CHECK TISSOT VENDOR
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking Tissot vendor"
-echo "============================================================"
-
-if [ -d "vendor/xiaomi/tissot" ]; then
-
-    echo "Tissot vendor:"
-    echo "vendor/xiaomi/tissot"
-
-else
-
-    echo "WARNING:"
-    echo "vendor/xiaomi/tissot tidak ditemukan"
-
-fi
-
-# ============================================================
-# CHECK MSM8953 COMMON VENDOR
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking MSM8953 common vendor"
-echo "============================================================"
-
-if [ -d "vendor/xiaomi/msm8953-common" ]; then
-
-    echo "MSM8953 common vendor:"
-    echo "vendor/xiaomi/msm8953-common"
-
-else
-
-    echo "WARNING:"
-    echo "vendor/xiaomi/msm8953-common tidak ditemukan"
-
-fi
-
-# ============================================================
-# CHECK DEVICE COMMON
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking MSM8953 common device tree"
-echo "============================================================"
-
-if [ -d "device/xiaomi/msm8953-common" ]; then
-
-    echo "MSM8953 common device:"
-    echo "device/xiaomi/msm8953-common"
-
-else
-
-    echo "WARNING:"
-    echo "device/xiaomi/msm8953-common tidak ditemukan"
-
-fi
-
-# ============================================================
-# CHECK HARDWARE XIAOMI
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking hardware/xiaomi"
-echo "============================================================"
-
-if [ -d "hardware/xiaomi" ]; then
-
-    echo "hardware/xiaomi found"
-
-else
-
-    echo "WARNING:"
-    echo "hardware/xiaomi tidak ditemukan"
+    echo -e "${YELLOW}[WARNING]${RESET} external/highway/Android.bp missing"
 
 fi
 
@@ -437,55 +321,41 @@ fi
 
 echo
 echo "============================================================"
-echo "PRE-BUILD SUMMARY"
+echo "                    PRE-BUILD SUMMARY"
 echo "============================================================"
 
 echo
-echo "ROM Branch:"
-echo "  $ROM_BRANCH"
-
-echo
-echo "Device:"
-echo "  $DEVICE"
-
-echo
-echo "Lunch Target:"
-echo "  $LUNCH_TARGET"
-
-echo
-echo "Kernel:"
-echo "  kernel/mainline/msm8953-mainline"
-
-echo
-echo "Device Tree:"
-echo "  device/xiaomi/mi89xx-mainline"
-
-echo
-echo "Vendor:"
-echo "  vendor/xiaomi/tissot"
-
-echo
-echo "Common Vendor:"
-echo "  vendor/xiaomi/msm8953-common"
-
-# ============================================================
-# BUILD
-# ============================================================
+echo "ROM             : $ROM_NAME"
+echo "Branch          : $ROM_BRANCH"
+echo "Device          : $DEVICE"
+echo "Lunch           : $LUNCH_TARGET"
+echo "Build username  : $BUILD_USERNAME"
+echo "Build hostname  : $BUILD_HOSTNAME"
+echo "CPU threads     : $(nproc --all)"
+echo "Output          : $OUT_DIR"
 
 echo
 echo "============================================================"
-echo "                STARTING BUILD"
+echo "                    STARTING BUILD"
 echo "============================================================"
 
 echo
-echo "Running:"
+echo "Command:"
 echo
 echo "    mka bacon"
 echo
 
 BUILD_START=$(date +%s)
 
+# ============================================================
+# BUILD
+# ============================================================
+
 mka bacon
+
+# ============================================================
+# BUILD TIME
+# ============================================================
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
@@ -496,161 +366,150 @@ BUILD_TIME=$((BUILD_END - BUILD_START))
 
 echo
 echo "============================================================"
-echo "                BUILD SUCCESS"
+echo "                    BUILD SUCCESS"
 echo "============================================================"
 
 echo
-echo "Build completed successfully."
+echo -e "${GREEN}${BOLD}Build completed successfully.${RESET}"
 
 echo
 echo "Build time:"
 echo "$BUILD_TIME seconds"
 
 # ============================================================
-# FIND OUTPUT DIRECTORY
+# ARTIFACT CHECK
 # ============================================================
-
-OUT_DIR="out/target/product/$DEVICE"
 
 echo
 echo "============================================================"
-echo "Checking build output"
+echo "                  BUILD ARTIFACTS"
 echo "============================================================"
 
-if [ -d "$OUT_DIR" ]; then
+if [ ! -d "$OUT_DIR" ]; then
 
-    echo
-    echo "Output directory:"
+    echo -e "${RED}ERROR:${RESET}"
+    echo "Output directory tidak ditemukan:"
     echo "$OUT_DIR"
-
-    echo
-    echo "Artifacts:"
-    echo "----------------------------------------"
-
-    find "$OUT_DIR" \
-        -maxdepth 1 \
-        -type f \
-        \( \
-            -name "*.zip" \
-            -o -name "*.img" \
-            -o -name "*.sha256sum" \
-            -o -name "*.json" \
-        \) \
-        -printf '%f\n' \
-        | sort
-
-else
-
-    echo
-    echo "WARNING:"
-    echo "$OUT_DIR tidak ditemukan"
+    exit 1
 
 fi
 
+echo
+echo "Output directory:"
+echo "$OUT_DIR"
+
+echo
+echo "Files:"
+echo "--------------------------------------------"
+
+find "$OUT_DIR" \
+    -maxdepth 1 \
+    -type f \
+    \( \
+        -name "*.zip" \
+        -o -name "*.img" \
+        -o -name "*.sha256sum" \
+        -o -name "*.json" \
+    \) \
+    -printf '%f\n' \
+    | sort
+
 # ============================================================
-# IMPORTANT ARTIFACT CHECK
+# ROM ZIP
 # ============================================================
 
 echo
 echo "============================================================"
-echo "Checking important artifacts"
+echo "                    ROM ZIP CHECK"
 echo "============================================================"
 
-if [ -f "$OUT_DIR/boot.img" ]; then
-    echo "[OK] boot.img"
-else
-    echo "[--] boot.img"
-fi
-
-if [ -f "$OUT_DIR/vendor.img" ]; then
-    echo "[OK] vendor.img"
-else
-    echo "[--] vendor.img"
-fi
-
-if [ -f "$OUT_DIR/system.img" ]; then
-    echo "[OK] system.img"
-else
-    echo "[--] system.img"
-fi
-
-if [ -f "$OUT_DIR/init_boot.img" ]; then
-    echo "[OK] init_boot.img"
-else
-    echo "[--] init_boot.img"
-fi
-
-if [ -f "$OUT_DIR/recovery.img" ]; then
-    echo "[OK] recovery.img"
-else
-    echo "[--] recovery.img"
-fi
-
-# ============================================================
-# ZIP CHECK
-# ============================================================
-
-echo
-echo "============================================================"
-echo "Checking LineageOS ZIP"
-echo "============================================================"
-
-ZIP_COUNT=$(find "$OUT_DIR" \
+ZIP=$(find "$OUT_DIR" \
     -maxdepth 1 \
     -type f \
     -name "*.zip" \
-    2>/dev/null \
-    | wc -l)
+    ! -name "*ota*.zip" \
+    | head -n 1)
 
-if [ "$ZIP_COUNT" -gt 0 ]; then
+if [ -n "$ZIP" ]; then
 
+    echo -e "${GREEN}ROM ZIP found:${RESET}"
     echo
-    echo "LineageOS ZIP found:"
-    find "$OUT_DIR" \
-        -maxdepth 1 \
-        -type f \
-        -name "*.zip" \
-        -printf '%f\n' \
-        | sort
+    echo "$ZIP"
 
 else
 
-    echo
-    echo "WARNING: LineageOS ZIP tidak ditemukan"
+    echo -e "${RED}No ROM ZIP found in artifacts!${RESET}"
+    exit 1
 
 fi
 
 # ============================================================
-# FINAL SUMMARY
+# IMAGE CHECK
 # ============================================================
 
 echo
 echo "============================================================"
-echo "                FINAL BUILD SUMMARY"
+echo "                    IMAGE CHECK"
+echo "============================================================"
+
+for IMAGE in \
+    boot.img \
+    vendor.img \
+    system.img \
+    init_boot.img \
+    recovery.img
+do
+
+    if [ -f "$OUT_DIR/$IMAGE" ]; then
+        echo -e "${GREEN}[OK]${RESET} $IMAGE"
+    else
+        echo -e "${YELLOW}[--]${RESET} $IMAGE"
+    fi
+
+done
+
+# ============================================================
+# SHA256
+# ============================================================
+
+echo
+echo "============================================================"
+echo "                    SHA256"
+echo "============================================================"
+
+if command -v sha256sum >/dev/null 2>&1; then
+
+    sha256sum "$ZIP"
+
+fi
+
+# ============================================================
+# FINAL
+# ============================================================
+
+echo
+echo "============================================================"
+echo "                  BUILD COMPLETE"
 echo "============================================================"
 
 echo
-echo "ROM:"
-echo "  LineageOS $ROM_BRANCH"
+echo -e "${GREEN}${BOLD}ROM:${RESET} $ROM_NAME"
+echo -e "${GREEN}${BOLD}DEVICE:${RESET} $DEVICE"
 
 echo
-echo "Device:"
-echo "  $DEVICE"
-
-echo
-echo "Lunch:"
-echo "  $LUNCH_TARGET"
+echo "ZIP:"
+echo "$ZIP"
 
 echo
 echo "Output:"
-echo "  $OUT_DIR"
+echo "$OUT_DIR"
 
 echo
 echo "Build time:"
-echo "  $BUILD_TIME seconds"
+echo "$BUILD_TIME seconds"
 
 echo
 echo "============================================================"
-echo "                  BUILD FINISHED"
+echo "                       DONE"
 echo "============================================================"
 echo
