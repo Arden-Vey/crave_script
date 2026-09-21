@@ -21,7 +21,7 @@ ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
 
 DEVICE="tissot_mainline"
-LUNCH_TARGET="lineage_tissot_mainline-trunk_staging-userdebug"
+LUNCH_TARGET="lineage_tissot_mainline-userdebug"
 
 MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
 MANIFEST_BRANCH="main"
