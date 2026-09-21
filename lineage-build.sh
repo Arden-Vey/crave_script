@@ -1,5 +1,10 @@
+```bash
 #!/bin/bash
-set -e
+set -euo pipefail
+
+# ============================================================
+# LINEAGEOS 23.2 - GENERIC ARM64 BUILD
+# ============================================================
 
 # ============================================================
 # COLORS
@@ -21,7 +26,9 @@ ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
 
 DEVICE="Generic_arm64"
-LUNCH_TARGET=""
+PRODUCT="lineage_Generic_arm64"
+RELEASE="trunk_staging"
+VARIANT="userdebug"
 
 MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
 MANIFEST_BRANCH="generic"
@@ -29,7 +36,34 @@ MANIFEST_BRANCH="generic"
 BUILD_USERNAME="Arden-Vey"
 BUILD_HOSTNAME="crave"
 
-OUT_DIR="out/target/product/$DEVICE"
+OUT_DIR="out/target/product/${DEVICE}"
+
+# ============================================================
+# FUNCTIONS
+# ============================================================
+
+info() {
+    echo -e "${BLUE}[INFO]${RESET} $1"
+}
+
+success() {
+    echo -e "${GREEN}[OK]${RESET} $1"
+}
+
+warning() {
+    echo -e "${YELLOW}[WARNING]${RESET} $1"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${RESET} $1"
+}
+
+section() {
+    echo
+    echo -e "${CYAN}${BOLD}============================================================${RESET}"
+    echo -e "${CYAN}${BOLD} $1${RESET}"
+    echo -e "${CYAN}${BOLD}============================================================${RESET}"
+}
 
 # ============================================================
 # BANNER
@@ -53,52 +87,74 @@ banner() {
     echo "║                                                                 ║"
     echo "╠═════════════════════════════════════════════════════════════════╣"
     echo "║  ROM        : LineageOS 23.2                                    ║"
-    echo "║  Device     : Generic ARM64 GSI                                 ║"
+    echo "║  Device     : Generic ARM64                                     ║"
     echo "║  Branch     : lineage-23.2                                      ║"
+    echo "║  Release    : trunk_staging                                     ║"
     echo "║  Build      : userdebug                                         ║"
     echo "╚═════════════════════════════════════════════════════════════════╝"
     echo -e "${RESET}"
 }
 
+# ============================================================
+# START
+# ============================================================
+
 banner
 
-# ============================================================
-# BUILD INFO
-# ============================================================
+section "BUILD CONFIGURATION"
 
-echo
-echo -e "${BLUE}${BOLD}Build configuration${RESET}"
-echo "--------------------------------------------"
 echo "ROM             : $ROM_NAME"
-echo "ROM branch      : $ROM_BRANCH"
+echo "Branch          : $ROM_BRANCH"
 echo "Device          : $DEVICE"
-echo "Lunch target    : AUTO"
+echo "Product         : $PRODUCT"
+echo "Release         : $RELEASE"
+echo "Variant         : $VARIANT"
+echo "Lunch           : $PRODUCT $RELEASE $VARIANT"
 echo "Manifest        : $MANIFEST_URL"
 echo "Manifest branch : $MANIFEST_BRANCH"
 echo "Output          : $OUT_DIR"
-echo
+echo "CPU threads     : $(nproc --all)"
+
+# ============================================================
+# REQUIREMENTS
+# ============================================================
+
+section "CHECKING REQUIREMENTS"
+
+for CMD in repo git curl; do
+    if command -v "$CMD" >/dev/null 2>&1; then
+        success "$CMD"
+    else
+        error "$CMD tidak ditemukan."
+        exit 1
+    fi
+done
+
+if [ ! -x "/opt/crave/resync.sh" ]; then
+    error "/opt/crave/resync.sh tidak ditemukan."
+    exit 1
+fi
+
+success "Build environment ready."
 
 # ============================================================
 # CLEAN LOCAL MANIFEST
 # ============================================================
 
-echo
-echo "============================================="
-echo "    cleaning up previous local manifests"
-echo "============================================="
+section "CLEANING LOCAL MANIFEST"
 
-rm -rf .repo/local_manifests
-
-echo -e "${GREEN}Local manifests cleaned.${RESET}"
+if [ -d ".repo/local_manifests" ]; then
+    rm -rf .repo/local_manifests
+    success "Old local manifests removed."
+else
+    info "No previous local manifests."
+fi
 
 # ============================================================
 # REPO INIT
 # ============================================================
 
-echo
-echo "====================="
-echo "      repo init"
-echo "====================="
+section "REPO INIT"
 
 repo init \
     -u https://github.com/LineageOS/android.git \
@@ -106,16 +162,13 @@ repo init \
     --depth=1 \
     --git-lfs
 
-echo -e "${GREEN}repo init completed.${RESET}"
+success "Repo initialized."
 
 # ============================================================
 # LOCAL MANIFEST
 # ============================================================
 
-echo
-echo "========================"
-echo "   cloning manifest"
-echo "========================"
+section "CLONING LOCAL MANIFEST"
 
 git clone \
     -b "$MANIFEST_BRANCH" \
@@ -123,29 +176,24 @@ git clone \
     "$MANIFEST_URL" \
     .repo/local_manifests
 
-echo -e "${GREEN}Local manifest cloned.${RESET}"
+success "Local manifest cloned."
 
 # ============================================================
 # CRAVE SYNC
 # ============================================================
 
-echo
-echo "==================="
-echo "     repo sync"
-echo "==================="
+section "SYNCING SOURCE"
 
+info "Running /opt/crave/resync.sh ..."
 /opt/crave/resync.sh
 
-echo -e "${GREEN}Repository sync completed.${RESET}"
+success "Source sync completed."
 
 # ============================================================
 # BUILD ENVIRONMENT
 # ============================================================
 
-echo
-echo "=============================="
-echo "   build environment setup"
-echo "=============================="
+section "BUILD ENVIRONMENT"
 
 export BUILD_USERNAME="$BUILD_USERNAME"
 export BUILD_HOSTNAME="$BUILD_HOSTNAME"
@@ -159,416 +207,216 @@ echo "BUILD_USERNAME=$BUILD_USERNAME"
 echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
 echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
 echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
+echo "LC_ALL=$LC_ALL"
 
 # ============================================================
-# BUILD ENV
+# LOAD BUILD ENVIRONMENT
 # ============================================================
 
-echo
-echo "=============================="
-echo "   loading build environment"
-echo "=============================="
+section "LOADING BUILD ENVIRONMENT"
+
+if [ ! -f "build/envsetup.sh" ]; then
+    error "build/envsetup.sh tidak ditemukan."
+    exit 1
+fi
 
 source build/envsetup.sh
 
-echo -e "${GREEN}Build environment loaded.${RESET}"
+success "Build environment loaded."
 
 # ============================================================
-# GENERIC DEVICE CHECK
+# CHECK GENERIC TREE
 # ============================================================
 
-echo
-echo "============================================="
-echo "       checking generic device tree"
-echo "============================================="
+section "CHECKING GENERIC DEVICE TREE"
 
-if [ -d "device/mainline/generic" ]; then
-    echo -e "${GREEN}[OK]${RESET} device/mainline/generic"
-else
-    echo -e "${RED}[ERROR]${RESET} device/mainline/generic"
-    exit 1
-fi
+REQUIRED_DIRS=(
+    "device/mainline/generic"
+    "device/mainline/common"
+    "hardware/mainline/common"
+)
 
-# ============================================================
-# GENERIC COMMON CHECK
-# ============================================================
-
-echo
-echo "============================================="
-echo "       checking mainline common tree"
-echo "============================================="
-
-if [ -d "device/mainline/common" ]; then
-    echo -e "${GREEN}[OK]${RESET} device/mainline/common"
-else
-    echo -e "${RED}[ERROR]${RESET} device/mainline/common"
-    exit 1
-fi
-
-# ============================================================
-# MAINLINE HARDWARE CHECK
-# ============================================================
-
-echo
-echo "============================================="
-echo "       checking mainline hardware"
-echo "============================================="
-
-if [ -d "hardware/mainline/common" ]; then
-    echo -e "${GREEN}[OK]${RESET} hardware/mainline/common"
-else
-    echo -e "${RED}[ERROR]${RESET} hardware/mainline/common"
-    exit 1
-fi
-
-# ============================================================
-# KERNEL CONFIG CHECK
-# ============================================================
-
-echo
-echo "============================================="
-echo "       checking kernel mainline configs"
-echo "============================================="
-
-if [ -d "kernel/mainline/configs" ]; then
-    echo -e "${GREEN}[OK]${RESET} kernel/mainline/configs"
-else
-    echo -e "${YELLOW}[WARNING]${RESET} kernel/mainline/configs missing"
-fi
-
-# ============================================================
-# MAINLINE DEPENDENCIES CHECK
-# ============================================================
-
-echo
-echo "============================================="
-echo "       checking mainline dependencies"
-echo "============================================="
-
-for DIR in \
-    external/drm_hwcomposer-upstream \
-    external/libdisplay-info-upstream \
-    external/minigbm-upstream \
-    external/linux-firmware-mainline \
-    external/mesa \
-    external/tinyhal \
-    prebuilts/mesa-build-dep \
-    prebuilts/bootmgr
-do
+for DIR in "${REQUIRED_DIRS[@]}"; do
     if [ -d "$DIR" ]; then
-        echo -e "${GREEN}[OK]${RESET} $DIR"
+        success "$DIR"
     else
-        echo -e "${YELLOW}[WARNING]${RESET} $DIR missing"
+        error "$DIR tidak ditemukan."
+        exit 1
     fi
 done
 
 # ============================================================
-# AUTO DETECT LUNCH TARGET
+# OPTIONAL MAINLINE DEPENDENCIES
 # ============================================================
 
-echo
-echo "============================================="
-echo "       detecting GSI lunch target"
-echo "============================================="
+section "CHECKING MAINLINE DEPENDENCIES"
 
-PRODUCT_NAME="lineage_${DEVICE}"
-BUILD_VARIANT="userdebug"
+OPTIONAL_DIRS=(
+    "kernel/mainline/configs"
+    "external/drm_hwcomposer-upstream"
+    "external/libdisplay-info-upstream"
+    "external/minigbm-upstream"
+    "external/linux-firmware-mainline"
+    "external/mesa"
+    "external/tinyhal"
+    "prebuilts/mesa-build-dep"
+    "prebuilts/bootmgr"
+)
 
-echo
-echo "Product : $PRODUCT_NAME"
-echo "Variant : $BUILD_VARIANT"
-echo
-
-# ------------------------------------------------------------
-# METHOD 1
-# Query all registered lunch combos
-# ------------------------------------------------------------
-
-echo "Searching registered lunch combinations..."
-
-LUNCH_TARGET=""
-
-if command -v lunch >/dev/null 2>&1; then
-
-    AVAILABLE_LUNCHES=""
-
-    # Modern Lineage/AOSP exposes --list.
-    AVAILABLE_LUNCHES=$(lunch --list 2>/dev/null || true)
-
-    # Search exact product + userdebug.
-    if [ -n "$AVAILABLE_LUNCHES" ]; then
-
-        LUNCH_TARGET=$(
-            printf '%s\n' "$AVAILABLE_LUNCHES" |
-            grep -E \
-                "^${PRODUCT_NAME}(-[^[:space:]]+)?-${BUILD_VARIANT}$" |
-            head -n 1 ||
-            true
-        )
-
+for DIR in "${OPTIONAL_DIRS[@]}"; do
+    if [ -d "$DIR" ]; then
+        success "$DIR"
+    else
+        warning "$DIR missing"
     fi
-
-fi
-
-# ------------------------------------------------------------
-# METHOD 2
-# Search product definitions directly
-# ------------------------------------------------------------
-
-if [ -z "$LUNCH_TARGET" ]; then
-
-    echo "Registered lunch list did not provide a match."
-    echo "Searching product definitions..."
-
-    LUNCH_TARGET=$(
-        grep -RhoE \
-            "${PRODUCT_NAME}(-[A-Za-z0-9_.-]+)?-${BUILD_VARIANT}" \
-            device \
-            vendor \
-            build \
-            2>/dev/null |
-        sort -u |
-        head -n 1 ||
-        true
-    )
-
-fi
-
-# ------------------------------------------------------------
-# METHOD 3
-# Search AndroidProducts.mk
-# ------------------------------------------------------------
-
-if [ -z "$LUNCH_TARGET" ]; then
-
-    echo "Searching AndroidProducts.mk..."
-
-    LUNCH_TARGET=$(
-        grep -RhoE \
-            "${PRODUCT_NAME}(-[A-Za-z0-9_.-]+)?-${BUILD_VARIANT}" \
-            device \
-            vendor \
-            2>/dev/null |
-        sort -u |
-        head -n 1 ||
-        true
-    )
-
-fi
-
-# ------------------------------------------------------------
-# Validate lunch target
-# ------------------------------------------------------------
-
-if [ -z "$LUNCH_TARGET" ]; then
-
-    echo
-    echo -e "${RED}[ERROR]${RESET} Unable to automatically detect lunch target."
-    echo
-    echo "Expected product : $PRODUCT_NAME"
-    echo "Expected variant : $BUILD_VARIANT"
-    echo
-    echo "Available Generic products:"
-    
-    if command -v lunch >/dev/null 2>&1; then
-        lunch --list 2>/dev/null |
-            grep -i "Generic_arm64" ||
-            true
-    fi
-
-    exit 1
-
-fi
-
-echo
-echo -e "${GREEN}[OK]${RESET} Lunch target detected:"
-echo
-echo -e "    ${CYAN}${BOLD}$LUNCH_TARGET${RESET}"
-echo
+done
 
 # ============================================================
 # LUNCH
 # ============================================================
 
+section "LUNCH TARGET"
+
+echo "Product : $PRODUCT"
+echo "Release : $RELEASE"
+echo "Variant : $VARIANT"
 echo
-echo "===================="
-echo "       lunch"
-echo "===================="
 
-lunch "$LUNCH_TARGET"
+info "Running:"
+echo
+echo "    lunch $PRODUCT $RELEASE $VARIANT"
+echo
 
-echo -e "${GREEN}Lunch completed.${RESET}"
+# IMPORTANT:
+# Do NOT use:
+# lunch lineage_Generic_arm64-userdebug
+#
+# LOS 23.2 uses:
+# lunch PRODUCT RELEASE VARIANT
+
+lunch "$PRODUCT" "$RELEASE" "$VARIANT"
+
+success "Lunch completed."
 
 # ============================================================
 # VERIFY TARGET
 # ============================================================
 
-echo
-echo "============================================="
-echo "          checking build target"
-echo "============================================="
+section "VERIFYING BUILD TARGET"
 
-echo "TARGET_PRODUCT      : $(get_build_var TARGET_PRODUCT)"
-echo "TARGET_BUILD_VARIANT: $(get_build_var TARGET_BUILD_VARIANT)"
-echo "TARGET_ARCH         : $(get_build_var TARGET_ARCH)"
-echo "TARGET_ARCH_VARIANT : $(get_build_var TARGET_ARCH_VARIANT)"
+TARGET_PRODUCT="$(get_build_var TARGET_PRODUCT)"
+TARGET_DEVICE="$(get_build_var TARGET_DEVICE)"
+TARGET_RELEASE="$(get_build_var TARGET_RELEASE)"
+TARGET_VARIANT="$(get_build_var TARGET_BUILD_VARIANT)"
+TARGET_ARCH="$(get_build_var TARGET_ARCH)"
+TARGET_ARCH_VARIANT="$(get_build_var TARGET_ARCH_VARIANT)"
+
+echo "TARGET_PRODUCT       : $TARGET_PRODUCT"
+echo "TARGET_DEVICE        : $TARGET_DEVICE"
+echo "TARGET_RELEASE       : $TARGET_RELEASE"
+echo "TARGET_BUILD_VARIANT : $TARGET_VARIANT"
+echo "TARGET_ARCH          : $TARGET_ARCH"
+echo "TARGET_ARCH_VARIANT  : $TARGET_ARCH_VARIANT"
+
+if [ "$TARGET_PRODUCT" != "$PRODUCT" ]; then
+    error "TARGET_PRODUCT tidak sesuai."
+    exit 1
+fi
+
+if [ "$TARGET_VARIANT" != "$VARIANT" ]; then
+    error "TARGET_BUILD_VARIANT tidak sesuai."
+    exit 1
+fi
+
+success "Build target verified."
 
 # ============================================================
-# VERIFY DEVICE
+# LIBJXL CHECK
 # ============================================================
 
-echo
-echo "============================================="
-echo "             verifying device"
-echo "============================================="
-
-DETECTED_PRODUCT="$(get_build_var TARGET_PRODUCT)"
-DETECTED_DEVICE="$(get_build_var TARGET_DEVICE)"
-
-echo "Expected product : $PRODUCT_NAME"
-echo "Detected product : $DETECTED_PRODUCT"
-echo "Detected device  : $DETECTED_DEVICE"
-
-# ============================================================
-# LIBJXL DEBUG
-# ============================================================
-
-echo
-echo "============================================="
-echo "       checking external/libjxl"
-echo "============================================="
+section "CHECKING LIBJXL"
 
 if [ -f "external/libjxl/Android.bp" ]; then
-
-    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp"
-
-    echo
-    echo "Relevant properties:"
+    success "external/libjxl/Android.bp"
 
     grep -nE \
         'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
         external/libjxl/Android.bp \
         || true
-
 else
-
-    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp missing"
-
+    warning "external/libjxl/Android.bp missing"
 fi
 
 # ============================================================
-# HIGHWAY DEBUG
+# HIGHWAY CHECK
 # ============================================================
 
-echo
-echo "============================================="
-echo "       checking external/highway"
-echo "============================================="
+section "CHECKING HIGHWAY"
 
 if [ -f "external/highway/Android.bp" ]; then
-
-    echo -e "${GREEN}[OK]${RESET} external/highway/Android.bp"
-
-    echo
-    echo "Relevant properties:"
+    success "external/highway/Android.bp"
 
     grep -nE \
         'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
         external/highway/Android.bp \
         || true
-
 else
-
-    echo -e "${YELLOW}[WARNING]${RESET} external/highway/Android.bp missing"
-
+    warning "external/highway/Android.bp missing"
 fi
 
 # ============================================================
 # PRE-BUILD SUMMARY
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                    PRE-BUILD SUMMARY"
-echo "============================================================"
+section "PRE-BUILD SUMMARY"
 
-echo
 echo "ROM             : $ROM_NAME"
 echo "Branch          : $ROM_BRANCH"
 echo "Device          : $DEVICE"
-echo "Lunch           : $LUNCH_TARGET"
+echo "Product         : $PRODUCT"
+echo "Release         : $RELEASE"
+echo "Variant         : $VARIANT"
 echo "Build username  : $BUILD_USERNAME"
 echo "Build hostname  : $BUILD_HOSTNAME"
 echo "CPU threads     : $(nproc --all)"
 echo "Output          : $OUT_DIR"
 
 echo
-echo "============================================================"
-echo "                    STARTING BUILD"
-echo "============================================================"
-
-echo
-echo "Command:"
+echo "Build command:"
 echo
 echo "    mka bacon"
-echo
-
-BUILD_START=$(date +%s)
 
 # ============================================================
 # BUILD
 # ============================================================
 
-mka bacon
+section "STARTING BUILD"
 
-# ============================================================
-# BUILD TIME
-# ============================================================
+BUILD_START=$(date +%s)
+
+mka bacon
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
 
 # ============================================================
-# BUILD SUCCESS
-# ============================================================
-
-echo
-echo "============================================================"
-echo "                    BUILD SUCCESS"
-echo "============================================================"
-
-echo
-echo -e "${GREEN}${BOLD}Build completed successfully.${RESET}"
-
-echo
-echo "Build time:"
-echo "$BUILD_TIME seconds"
-
-# ============================================================
 # ARTIFACT CHECK
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                  BUILD ARTIFACTS"
-echo "============================================================"
+section "CHECKING BUILD ARTIFACTS"
 
 if [ ! -d "$OUT_DIR" ]; then
-
-    echo -e "${RED}ERROR:${RESET}"
-    echo "Output directory tidak ditemukan:"
+    error "Output directory tidak ditemukan:"
     echo "$OUT_DIR"
     exit 1
-
 fi
 
-echo
-echo "Output directory:"
+success "Output directory exists:"
 echo "$OUT_DIR"
 
 echo
-echo "Files:"
-echo "--------------------------------------------"
+echo "Artifacts:"
+echo "------------------------------------------------------------"
 
 find "$OUT_DIR" \
     -maxdepth 1 \
@@ -586,38 +434,34 @@ find "$OUT_DIR" \
 # ROM ZIP
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                    ROM ZIP CHECK"
-echo "============================================================"
+section "ROM ZIP"
 
-ZIP=$(find "$OUT_DIR" \
-    -maxdepth 1 \
-    -type f \
-    -name "*.zip" \
-    ! -name "*ota*.zip" \
-    | head -n 1)
+ZIP=""
+
+while IFS= read -r FILE; do
+    ZIP="$FILE"
+    break
+done < <(
+    find "$OUT_DIR" \
+        -maxdepth 1 \
+        -type f \
+        -name "*.zip" \
+        ! -name "*ota*.zip" \
+        | sort
+)
 
 if [ -n "$ZIP" ]; then
-
-    echo -e "${GREEN}ROM ZIP found:${RESET}"
-    echo
+    success "ROM ZIP found:"
     echo "$ZIP"
-
 else
-
-    echo -e "${RED}No ROM ZIP found in artifacts!${RESET}"
-
+    warning "No ROM ZIP found."
 fi
 
 # ============================================================
 # IMAGE CHECK
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                    IMAGE CHECK"
-echo "============================================================"
+section "IMAGE CHECK"
 
 for IMAGE in \
     boot.img \
@@ -630,58 +474,52 @@ for IMAGE in \
     recovery.img \
     super.img
 do
-
     if [ -f "$OUT_DIR/$IMAGE" ]; then
-        echo -e "${GREEN}[OK]${RESET} $IMAGE"
+        success "$IMAGE"
     else
         echo -e "${YELLOW}[--]${RESET} $IMAGE"
     fi
-
 done
 
 # ============================================================
 # SHA256
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                    SHA256"
-echo "============================================================"
+section "SHA256"
 
-if [ -n "$ZIP" ] && command -v sha256sum >/dev/null 2>&1; then
+if [ -n "$ZIP" ]; then
     sha256sum "$ZIP"
+else
+    warning "ZIP tidak tersedia, SHA256 dilewati."
 fi
 
 # ============================================================
-# FINAL
+# BUILD TIME
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                  BUILD COMPLETE"
-echo "============================================================"
+section "BUILD COMPLETE"
+
+echo "ROM        : $ROM_NAME"
+echo "Device     : $DEVICE"
+echo "Product    : $PRODUCT"
+echo "Release    : $RELEASE"
+echo "Variant    : $VARIANT"
+echo "Output     : $OUT_DIR"
+echo "Build time : $BUILD_TIME seconds"
 
 echo
-echo -e "${GREEN}${BOLD}ROM:${RESET} $ROM_NAME"
-echo -e "${GREEN}${BOLD}DEVICE:${RESET} $DEVICE"
 
-echo
-echo "Lunch:"
-echo "$LUNCH_TARGET"
-
-echo
-echo "ZIP:"
-echo "$ZIP"
-
-echo
-echo "Output:"
-echo "$OUT_DIR"
-
-echo
-echo "Build time:"
-echo "$BUILD_TIME seconds"
+if [ -n "$ZIP" ]; then
+    echo -e "${GREEN}${BOLD}BUILD SUCCESS${RESET}"
+    echo
+    echo "ROM ZIP:"
+    echo "$ZIP"
+else
+    echo -e "${YELLOW}${BOLD}BUILD FINISHED, BUT NO ROM ZIP WAS FOUND${RESET}"
+fi
 
 echo
 echo "============================================================"
-echo "                       DONE"
+echo "                         DONE"
 echo "============================================================"
+```
