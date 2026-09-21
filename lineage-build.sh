@@ -3,8 +3,26 @@
 set -euo pipefail
 
 # ============================================================
-# LINEAGEOS 23.2 - GENERIC ARM64 BUILD
+# LINEAGEOS 23.2 - GENERIC ARM64
 # ============================================================
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+ROM_NAME="LineageOS 23.2"
+ROM_BRANCH="lineage-23.2"
+
+DEVICE="Generic_arm64"
+BUILD_TARGET="all_images"
+
+MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
+MANIFEST_BRANCH="generic"
+
+BUILD_USERNAME="Arden-Vey"
+BUILD_HOSTNAME="crave"
+
+OUT_DIR="out/target/product/$DEVICE"
 
 # ============================================================
 # COLORS
@@ -19,44 +37,8 @@ BOLD='\033[1m'
 RESET='\033[0m'
 
 # ============================================================
-# CONFIG
-# ============================================================
-
-ROM_NAME="LineageOS 23.2"
-ROM_BRANCH="lineage-23.2"
-
-DEVICE="Generic_arm64"
-PRODUCT="lineage_Generic_arm64"
-RELEASE="trunk_staging"
-VARIANT="userdebug"
-
-MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
-MANIFEST_BRANCH="generic"
-
-BUILD_USERNAME="Arden-Vey"
-BUILD_HOSTNAME="crave"
-
-OUT_DIR="out/target/product/${DEVICE}"
-
-# ============================================================
 # FUNCTIONS
 # ============================================================
-
-info() {
-    echo -e "${BLUE}[INFO]${RESET} $1"
-}
-
-success() {
-    echo -e "${GREEN}[OK]${RESET} $1"
-}
-
-warning() {
-    echo -e "${YELLOW}[WARNING]${RESET} $1"
-}
-
-error() {
-    echo -e "${RED}[ERROR]${RESET} $1"
-}
 
 section() {
     echo
@@ -65,51 +47,44 @@ section() {
     echo -e "${CYAN}${BOLD}============================================================${RESET}"
 }
 
+ok() {
+    echo -e "${GREEN}[OK]${RESET} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}[WARNING]${RESET} $1"
+}
+
+err() {
+    echo -e "${RED}[ERROR]${RESET} $1"
+}
+
 # ============================================================
 # BANNER
 # ============================================================
 
-banner() {
-    clear
+clear
 
-    echo -e "${CYAN}${BOLD}"
-    echo "╔═════════════════════════════════════════════════════════════════╗"
-    echo "║                                                                 ║"
-    echo "║      ██╗     ██╗███╗   ██╗███████╗ █████╗  ██████╗ ███████╗     ║"
-    echo "║      ██║     ██║████╗  ██║██╔════╝██╔══██╗██╔════╝ ██╔════╝     ║"
-    echo "║      ██║     ██║██╔██╗ ██║█████╗  ███████║██║  ███╗█████╗       ║"
-    echo "║      ██║     ██║██║╚██╗██║██╔══╝  ██╔══██║██║   ██║██╔══╝       ║"
-    echo "║      ███████╗██║██║ ╚████║███████╗██║  ██║╚██████╔╝███████╗     ║"
-    echo "║      ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ║"
-    echo "║                                                                 ║"
-    echo "║                    G E N E R I C   M A I N L I N E              ║"
-    echo "║                    Automated Release Builder                    ║"
-    echo "║                                                                 ║"
-    echo "╠═════════════════════════════════════════════════════════════════╣"
-    echo "║  ROM        : LineageOS 23.2                                    ║"
-    echo "║  Device     : Generic ARM64                                     ║"
-    echo "║  Branch     : lineage-23.2                                      ║"
-    echo "║  Release    : trunk_staging                                     ║"
-    echo "║  Build      : userdebug                                         ║"
-    echo "╚═════════════════════════════════════════════════════════════════╝"
-    echo -e "${RESET}"
-}
+echo -e "${CYAN}${BOLD}"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║                                                              ║"
+echo "║              LINEAGEOS 23.2 GENERIC MAINLINE                 ║"
+echo "║                                                              ║"
+echo "║              Generic ARM64 Automated Builder                 ║"
+echo "║                                                              ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo -e "${RESET}"
 
 # ============================================================
-# START
+# CONFIGURATION
 # ============================================================
-
-banner
 
 section "BUILD CONFIGURATION"
 
 echo "ROM             : $ROM_NAME"
 echo "Branch          : $ROM_BRANCH"
 echo "Device          : $DEVICE"
-echo "Product         : $PRODUCT"
-echo "Release         : $RELEASE"
-echo "Variant         : $VARIANT"
-echo "Lunch           : $PRODUCT $RELEASE $VARIANT"
+echo "Build target    : $BUILD_TARGET"
 echo "Manifest        : $MANIFEST_URL"
 echo "Manifest branch : $MANIFEST_BRANCH"
 echo "Output          : $OUT_DIR"
@@ -121,21 +96,21 @@ echo "CPU threads     : $(nproc --all)"
 
 section "CHECKING REQUIREMENTS"
 
-for CMD in repo git curl; do
+for CMD in repo git; do
     if command -v "$CMD" >/dev/null 2>&1; then
-        success "$CMD"
+        ok "$CMD"
     else
-        error "$CMD tidak ditemukan."
+        err "$CMD tidak ditemukan."
         exit 1
     fi
 done
 
 if [ ! -x "/opt/crave/resync.sh" ]; then
-    error "/opt/crave/resync.sh tidak ditemukan."
+    err "/opt/crave/resync.sh tidak ditemukan."
     exit 1
 fi
 
-success "Build environment ready."
+ok "Crave resync tersedia."
 
 # ============================================================
 # CLEAN LOCAL MANIFEST
@@ -145,9 +120,9 @@ section "CLEANING LOCAL MANIFEST"
 
 if [ -d ".repo/local_manifests" ]; then
     rm -rf .repo/local_manifests
-    success "Old local manifests removed."
+    ok "Old local manifests removed."
 else
-    info "No previous local manifests."
+    ok "No old local manifests."
 fi
 
 # ============================================================
@@ -162,13 +137,13 @@ repo init \
     --depth=1 \
     --git-lfs
 
-success "Repo initialized."
+ok "Repo initialized."
 
 # ============================================================
 # LOCAL MANIFEST
 # ============================================================
 
-section "CLONING LOCAL MANIFEST"
+section "LOCAL MANIFEST"
 
 git clone \
     -b "$MANIFEST_BRANCH" \
@@ -176,18 +151,21 @@ git clone \
     "$MANIFEST_URL" \
     .repo/local_manifests
 
-success "Local manifest cloned."
+ok "Generic manifest cloned."
 
 # ============================================================
-# CRAVE SYNC
+# SYNC
 # ============================================================
 
-section "SYNCING SOURCE"
+section "SOURCE SYNC"
 
-info "Running /opt/crave/resync.sh ..."
+echo "Running:"
+echo "/opt/crave/resync.sh"
+echo
+
 /opt/crave/resync.sh
 
-success "Source sync completed."
+ok "Source sync completed."
 
 # ============================================================
 # BUILD ENVIRONMENT
@@ -207,25 +185,24 @@ echo "BUILD_USERNAME=$BUILD_USERNAME"
 echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
 echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
 echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
-echo "LC_ALL=$LC_ALL"
 
 # ============================================================
-# LOAD BUILD ENVIRONMENT
+# ENVSETUP
 # ============================================================
 
-section "LOADING BUILD ENVIRONMENT"
+section "LOADING LINEAGEOS BUILD ENVIRONMENT"
 
 if [ ! -f "build/envsetup.sh" ]; then
-    error "build/envsetup.sh tidak ditemukan."
+    err "build/envsetup.sh tidak ditemukan."
     exit 1
 fi
 
 source build/envsetup.sh
 
-success "Build environment loaded."
+ok "build/envsetup.sh loaded."
 
 # ============================================================
-# CHECK GENERIC TREE
+# GENERIC DEVICE CHECK
 # ============================================================
 
 section "CHECKING GENERIC DEVICE TREE"
@@ -238,15 +215,27 @@ REQUIRED_DIRS=(
 
 for DIR in "${REQUIRED_DIRS[@]}"; do
     if [ -d "$DIR" ]; then
-        success "$DIR"
+        ok "$DIR"
     else
-        error "$DIR tidak ditemukan."
+        err "$DIR tidak ditemukan."
         exit 1
     fi
 done
 
 # ============================================================
-# OPTIONAL MAINLINE DEPENDENCIES
+# GENERIC ARM64 CHECK
+# ============================================================
+
+section "CHECKING GENERIC ARM64"
+
+if [ -d "device/mainline/generic/Generic_arm64" ]; then
+    ok "device/mainline/generic/Generic_arm64"
+else
+    warn "Generic_arm64 directory tidak ditemukan."
+fi
+
+# ============================================================
+# DEPENDENCIES
 # ============================================================
 
 section "CHECKING MAINLINE DEPENDENCIES"
@@ -265,126 +254,64 @@ OPTIONAL_DIRS=(
 
 for DIR in "${OPTIONAL_DIRS[@]}"; do
     if [ -d "$DIR" ]; then
-        success "$DIR"
+        ok "$DIR"
     else
-        warning "$DIR missing"
+        warn "$DIR missing"
     fi
 done
 
 # ============================================================
-# LUNCH
+# BREAKFAST
 # ============================================================
 
-section "LUNCH TARGET"
+section "SELECTING GENERIC ARM64"
 
-echo "Product : $PRODUCT"
-echo "Release : $RELEASE"
-echo "Variant : $VARIANT"
+echo "Running:"
+echo
+echo "    breakfast $DEVICE"
 echo
 
-info "Running:"
-echo
-echo "    lunch $PRODUCT $RELEASE $VARIANT"
-echo
+breakfast "$DEVICE"
 
-# IMPORTANT:
-# Do NOT use:
-# lunch lineage_Generic_arm64-userdebug
-#
-# LOS 23.2 uses:
-# lunch PRODUCT RELEASE VARIANT
-
-lunch "$PRODUCT" "$RELEASE" "$VARIANT"
-
-success "Lunch completed."
+ok "Generic ARM64 target selected."
 
 # ============================================================
 # VERIFY TARGET
 # ============================================================
 
-section "VERIFYING BUILD TARGET"
+section "VERIFYING TARGET"
 
 TARGET_PRODUCT="$(get_build_var TARGET_PRODUCT)"
 TARGET_DEVICE="$(get_build_var TARGET_DEVICE)"
-TARGET_RELEASE="$(get_build_var TARGET_RELEASE)"
-TARGET_VARIANT="$(get_build_var TARGET_BUILD_VARIANT)"
 TARGET_ARCH="$(get_build_var TARGET_ARCH)"
 TARGET_ARCH_VARIANT="$(get_build_var TARGET_ARCH_VARIANT)"
 
-echo "TARGET_PRODUCT       : $TARGET_PRODUCT"
-echo "TARGET_DEVICE        : $TARGET_DEVICE"
-echo "TARGET_RELEASE       : $TARGET_RELEASE"
-echo "TARGET_BUILD_VARIANT : $TARGET_VARIANT"
-echo "TARGET_ARCH          : $TARGET_ARCH"
-echo "TARGET_ARCH_VARIANT  : $TARGET_ARCH_VARIANT"
+echo "TARGET_PRODUCT      : $TARGET_PRODUCT"
+echo "TARGET_DEVICE       : $TARGET_DEVICE"
+echo "TARGET_ARCH         : $TARGET_ARCH"
+echo "TARGET_ARCH_VARIANT : $TARGET_ARCH_VARIANT"
 
-if [ "$TARGET_PRODUCT" != "$PRODUCT" ]; then
-    error "TARGET_PRODUCT tidak sesuai."
+if [ "$TARGET_DEVICE" != "$DEVICE" ]; then
+    err "TARGET_DEVICE tidak sesuai."
+    echo "Expected : $DEVICE"
+    echo "Detected : $TARGET_DEVICE"
     exit 1
 fi
 
-if [ "$TARGET_VARIANT" != "$VARIANT" ]; then
-    error "TARGET_BUILD_VARIANT tidak sesuai."
-    exit 1
-fi
-
-success "Build target verified."
+ok "Target verified."
 
 # ============================================================
-# LIBJXL CHECK
+# BUILD INFO
 # ============================================================
 
-section "CHECKING LIBJXL"
+section "BUILD INFORMATION"
 
-if [ -f "external/libjxl/Android.bp" ]; then
-    success "external/libjxl/Android.bp"
-
-    grep -nE \
-        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
-        external/libjxl/Android.bp \
-        || true
-else
-    warning "external/libjxl/Android.bp missing"
-fi
-
-# ============================================================
-# HIGHWAY CHECK
-# ============================================================
-
-section "CHECKING HIGHWAY"
-
-if [ -f "external/highway/Android.bp" ]; then
-    success "external/highway/Android.bp"
-
-    grep -nE \
-        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
-        external/highway/Android.bp \
-        || true
-else
-    warning "external/highway/Android.bp missing"
-fi
-
-# ============================================================
-# PRE-BUILD SUMMARY
-# ============================================================
-
-section "PRE-BUILD SUMMARY"
-
-echo "ROM             : $ROM_NAME"
-echo "Branch          : $ROM_BRANCH"
-echo "Device          : $DEVICE"
-echo "Product         : $PRODUCT"
-echo "Release         : $RELEASE"
-echo "Variant         : $VARIANT"
-echo "Build username  : $BUILD_USERNAME"
-echo "Build hostname  : $BUILD_HOSTNAME"
-echo "CPU threads     : $(nproc --all)"
-echo "Output          : $OUT_DIR"
-
-echo
-echo "Build command:"
-echo
-echo "    mka bacon"
+echo "Device       : $DEVICE"
+echo "Target       : $BUILD_TARGET"
+echo "Product      : $TARGET_PRODUCT"
+echo "Architecture : $TARGET_ARCH"
+echo "CPU threads  : $(nproc --all)"
+echo "Output       : $OUT_DIR"
 
 # ============================================================
 # BUILD
@@ -392,70 +319,49 @@ echo "    mka bacon"
 
 section "STARTING BUILD"
 
+echo "Command:"
+echo
+echo "    m $BUILD_TARGET"
+echo
+
 BUILD_START=$(date +%s)
 
-mka bacon
+m "$BUILD_TARGET"
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
 
 # ============================================================
-# ARTIFACT CHECK
+# OUTPUT CHECK
 # ============================================================
 
-section "CHECKING BUILD ARTIFACTS"
+section "CHECKING OUTPUT"
 
 if [ ! -d "$OUT_DIR" ]; then
-    error "Output directory tidak ditemukan:"
+    err "Output directory tidak ditemukan:"
     echo "$OUT_DIR"
     exit 1
 fi
 
-success "Output directory exists:"
-echo "$OUT_DIR"
+ok "Output directory exists."
 
 echo
-echo "Artifacts:"
+echo "Output:"
 echo "------------------------------------------------------------"
 
 find "$OUT_DIR" \
     -maxdepth 1 \
     -type f \
     \( \
-        -name "*.zip" \
-        -o -name "*.img" \
-        -o -name "*.sha256sum" \
+        -name "*.img" \
+        -o -name "*.iso" \
+        -o -name "*.EFI" \
+        -o -name "*.zip" \
         -o -name "*.json" \
+        -o -name "*.sha256sum" \
     \) \
     -printf '%f\n' \
     | sort
-
-# ============================================================
-# ROM ZIP
-# ============================================================
-
-section "ROM ZIP"
-
-ZIP=""
-
-while IFS= read -r FILE; do
-    ZIP="$FILE"
-    break
-done < <(
-    find "$OUT_DIR" \
-        -maxdepth 1 \
-        -type f \
-        -name "*.zip" \
-        ! -name "*ota*.zip" \
-        | sort
-)
-
-if [ -n "$ZIP" ]; then
-    success "ROM ZIP found:"
-    echo "$ZIP"
-else
-    warning "No ROM ZIP found."
-fi
 
 # ============================================================
 # IMAGE CHECK
@@ -472,26 +378,16 @@ for IMAGE in \
     vendor.img \
     init_boot.img \
     recovery.img \
-    super.img
+    super.img \
+    ramdisk-all-combined.img \
+    ramdisk-custom.img
 do
     if [ -f "$OUT_DIR/$IMAGE" ]; then
-        success "$IMAGE"
+        ok "$IMAGE"
     else
         echo -e "${YELLOW}[--]${RESET} $IMAGE"
     fi
 done
-
-# ============================================================
-# SHA256
-# ============================================================
-
-section "SHA256"
-
-if [ -n "$ZIP" ]; then
-    sha256sum "$ZIP"
-else
-    warning "ZIP tidak tersedia, SHA256 dilewati."
-fi
 
 # ============================================================
 # BUILD TIME
@@ -501,22 +397,12 @@ section "BUILD COMPLETE"
 
 echo "ROM        : $ROM_NAME"
 echo "Device     : $DEVICE"
-echo "Product    : $PRODUCT"
-echo "Release    : $RELEASE"
-echo "Variant    : $VARIANT"
+echo "Target     : $BUILD_TARGET"
 echo "Output     : $OUT_DIR"
 echo "Build time : $BUILD_TIME seconds"
 
 echo
-
-if [ -n "$ZIP" ]; then
-    echo -e "${GREEN}${BOLD}BUILD SUCCESS${RESET}"
-    echo
-    echo "ROM ZIP:"
-    echo "$ZIP"
-else
-    echo -e "${YELLOW}${BOLD}BUILD FINISHED, BUT NO ROM ZIP WAS FOUND${RESET}"
-fi
+echo -e "${GREEN}${BOLD}BUILD SUCCESS${RESET}"
 
 echo
 echo "============================================================"
