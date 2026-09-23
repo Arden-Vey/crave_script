@@ -1,6 +1,7 @@
-```bash
 #!/bin/bash
-set -euo pipefail
+set -eo pipefail
+# NOTE: JANGAN pakai -u (unbound variable) karena build/envsetup.sh LineageOS
+# tidak kompatibel dengan set -u. Kalau tetap mau -u, lihat bagian ENVSETUP.
 
 # ============================================================
 # LINEAGEOS 23.2 - GENERIC ARM64
@@ -59,11 +60,28 @@ err() {
     echo -e "${RED}[ERROR]${RESET} $1"
 }
 
+on_error() {
+    local exit_code=$?
+    local line_no=$1
+    echo
+    err "Build gagal di line $line_no (exit code: $exit_code)"
+    echo
+    echo "------------------------------------------------------------"
+    echo "Build Failed: returned $exit_code"
+    echo "------------------------------------------------------------"
+    exit "$exit_code"
+}
+
+trap 'on_error $LINENO' ERR
+
 # ============================================================
 # BANNER
 # ============================================================
 
-clear
+# Hanya clear kalau shell interaktif (biar tidak muncul escape sequence aneh)
+if [ -t 1 ]; then
+    clear
+fi
 
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -74,6 +92,16 @@ echo "║              Generic ARM64 Automated Builder                 ║"
 echo "║                                                              ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo -e "${RESET}"
+
+# ============================================================
+# CPU THREADS (safe fallback)
+# ============================================================
+
+if command -v nproc >/dev/null 2>&1; then
+    CPU_THREADS="$(nproc --all 2>/dev/null || echo 1)"
+else
+    CPU_THREADS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+fi
 
 # ============================================================
 # CONFIGURATION
@@ -88,7 +116,7 @@ echo "Build target    : $BUILD_TARGET"
 echo "Manifest        : $MANIFEST_URL"
 echo "Manifest branch : $MANIFEST_BRANCH"
 echo "Output          : $OUT_DIR"
-echo "CPU threads     : $(nproc --all)"
+echo "CPU threads     : $CPU_THREADS"
 
 # ============================================================
 # REQUIREMENTS
@@ -96,12 +124,16 @@ echo "CPU threads     : $(nproc --all)"
 
 section "CHECKING REQUIREMENTS"
 
-for CMD in repo git; do
+for CMD in repo git git-lfs curl; do
     if command -v "$CMD" >/dev/null 2>&1; then
         ok "$CMD"
     else
-        err "$CMD tidak ditemukan."
-        exit 1
+        if [ "$CMD" = "git-lfs" ]; then
+            warn "$CMD tidak ditemukan (diperlukan untuk --git-lfs)."
+        else
+            err "$CMD tidak ditemukan."
+            exit 1
+        fi
     fi
 done
 
@@ -131,11 +163,24 @@ fi
 
 section "REPO INIT"
 
-repo init \
-    -u https://github.com/LineageOS/android.git \
-    -b "$ROM_BRANCH" \
-    --depth=1 \
-    --git-lfs
+# Set TOP & ANDROID_BUILD_TOP sebelum source envsetup, supaya
+# variabel yang dipakai envsetup sudah terdefinisi.
+export TOP="$(pwd)"
+export ANDROID_BUILD_TOP="$TOP"
+
+if command -v git-lfs >/dev/null 2>&1; then
+    repo init \
+        -u https://github.com/LineageOS/android.git \
+        -b "$ROM_BRANCH" \
+        --depth=1 \
+        --git-lfs
+else
+    warn "git-lfs tidak ada, lanjut tanpa --git-lfs."
+    repo init \
+        -u https://github.com/LineageOS/android.git \
+        -b "$ROM_BRANCH" \
+        --depth=1
+fi
 
 ok "Repo initialized."
 
@@ -181,10 +226,15 @@ export ALLOW_MISSING_DEPENDENCIES=true
 
 export LC_ALL=C
 
+# Pastikan TOP ter-set lagi (beberapa script bisa overwrite)
+export TOP="$(pwd)"
+export ANDROID_BUILD_TOP="$TOP"
+
 echo "BUILD_USERNAME=$BUILD_USERNAME"
 echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
 echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
 echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
+echo "TOP=$TOP"
 
 # ============================================================
 # ENVSETUP
@@ -197,7 +247,13 @@ if [ ! -f "build/envsetup.sh" ]; then
     exit 1
 fi
 
+# PENTING: envsetup.sh LineageOS tidak kompatibel dengan `set -u`.
+# Karena script ini tidak pakai -u, kita bisa langsung source.
+# Kalau kamu nanti mau pakai -u, bungkus dengan `set +u` / `set -u`.
+set +u
+# shellcheck disable=SC1091
 source build/envsetup.sh
+set -e
 
 ok "build/envsetup.sh loaded."
 
@@ -213,14 +269,20 @@ REQUIRED_DIRS=(
     "hardware/mainline/common"
 )
 
+MISSING_REQUIRED=0
 for DIR in "${REQUIRED_DIRS[@]}"; do
     if [ -d "$DIR" ]; then
         ok "$DIR"
     else
         err "$DIR tidak ditemukan."
-        exit 1
+        MISSING_REQUIRED=1
     fi
 done
+
+if [ "$MISSING_REQUIRED" -ne 0 ]; then
+    err "Beberapa direktori wajib tidak ditemukan. Cek manifest / sync."
+    exit 1
+fi
 
 # ============================================================
 # GENERIC ARM64 CHECK
@@ -271,7 +333,9 @@ echo
 echo "    breakfast $DEVICE"
 echo
 
+set +u
 breakfast "$DEVICE"
+set -e
 
 ok "Generic ARM64 target selected."
 
@@ -281,20 +345,22 @@ ok "Generic ARM64 target selected."
 
 section "VERIFYING TARGET"
 
+set +u
 TARGET_PRODUCT="$(get_build_var TARGET_PRODUCT)"
 TARGET_DEVICE="$(get_build_var TARGET_DEVICE)"
 TARGET_ARCH="$(get_build_var TARGET_ARCH)"
 TARGET_ARCH_VARIANT="$(get_build_var TARGET_ARCH_VARIANT)"
+set -e
 
-echo "TARGET_PRODUCT      : $TARGET_PRODUCT"
-echo "TARGET_DEVICE       : $TARGET_DEVICE"
-echo "TARGET_ARCH         : $TARGET_ARCH"
-echo "TARGET_ARCH_VARIANT : $TARGET_ARCH_VARIANT"
+echo "TARGET_PRODUCT      : ${TARGET_PRODUCT:-<empty>}"
+echo "TARGET_DEVICE       : ${TARGET_DEVICE:-<empty>}"
+echo "TARGET_ARCH         : ${TARGET_ARCH:-<empty>}"
+echo "TARGET_ARCH_VARIANT : ${TARGET_ARCH_VARIANT:-<empty>}"
 
-if [ "$TARGET_DEVICE" != "$DEVICE" ]; then
+if [ "${TARGET_DEVICE:-}" != "$DEVICE" ]; then
     err "TARGET_DEVICE tidak sesuai."
     echo "Expected : $DEVICE"
-    echo "Detected : $TARGET_DEVICE"
+    echo "Detected : ${TARGET_DEVICE:-<empty>}"
     exit 1
 fi
 
@@ -308,9 +374,9 @@ section "BUILD INFORMATION"
 
 echo "Device       : $DEVICE"
 echo "Target       : $BUILD_TARGET"
-echo "Product      : $TARGET_PRODUCT"
-echo "Architecture : $TARGET_ARCH"
-echo "CPU threads  : $(nproc --all)"
+echo "Product      : ${TARGET_PRODUCT:-<empty>}"
+echo "Architecture : ${TARGET_ARCH:-<empty>}"
+echo "CPU threads  : $CPU_THREADS"
 echo "Output       : $OUT_DIR"
 
 # ============================================================
@@ -326,7 +392,9 @@ echo
 
 BUILD_START=$(date +%s)
 
+set +u
 m "$BUILD_TARGET"
+set -e
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
@@ -408,4 +476,3 @@ echo
 echo "============================================================"
 echo "                         DONE"
 echo "============================================================"
-```
