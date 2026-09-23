@@ -161,6 +161,22 @@ echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODUL
 echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
 
 # ============================================================
+# PATCH LIBJXL (FIX SDK_VERSION)
+# ============================================================
+
+echo
+echo "============================================="
+echo "       patching external/libjxl"
+echo "============================================="
+
+if [ -f "external/libjxl/Android.bp" ]; then
+    sed -i 's/sdk_version: "none"/sdk_version: "current"/' external/libjxl/Android.bp
+    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp dipatch"
+else
+    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp tidak ditemukan"
+fi
+
+# ============================================================
 # OPTIONAL DEVICE PROP
 # ============================================================
 
