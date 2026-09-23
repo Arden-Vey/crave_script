@@ -21,7 +21,7 @@ ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
 
 DEVICE="tissot_mainline"
-LUNCH_TARGET="lineage_tissot_mainline-userdebug"
+LUNCH_TARGET="lineage_tissot_mainline-trunk_staging-userdebug"
 
 MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
 MANIFEST_BRANCH="main"
@@ -313,35 +313,6 @@ else
 
     echo -e "${YELLOW}[WARNING]${RESET} external/highway/Android.bp missing"
 
-fi
-
-# ============================================================
-# ⬇️ PATCH: LIBJXL & HIGHWAY SDK VERSION
-# ============================================================
-# Ini blok baru. Fungsinya: ganti "sdk_version: none" jadi "sdk_version: current"
-# supaya Soong bisa build tanpa error parsing.
-
-echo
-echo "============================================="
-echo "   patching sdk_version: none -> current"
-echo "============================================="
-
-LIBJXL_BP="external/libjxl/Android.bp"
-if [ -f "$LIBJXL_BP" ]; then
-    echo "Patching $LIBJXL_BP ..."
-    sed -i 's/sdk_version: "none"/sdk_version: "current"/g' "$LIBJXL_BP"
-    echo -e "${GREEN}libjxl patched.${RESET}"
-else
-    echo -e "${YELLOW}[SKIP]${RESET} $LIBJXL_BP tidak ada"
-fi
-
-HIGHWAY_BP="external/highway/Android.bp"
-if [ -f "$HIGHWAY_BP" ]; then
-    echo "Patching $HIGHWAY_BP ..."
-    sed -i 's/sdk_version: "none"/sdk_version: "current"/g' "$HIGHWAY_BP"
-    echo -e "${GREEN}highway patched.${RESET}"
-else
-    echo -e "${YELLOW}[SKIP]${RESET} $HIGHWAY_BP tidak ada"
 fi
 
 # ============================================================
