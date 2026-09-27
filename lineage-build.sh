@@ -158,6 +158,40 @@ echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
 echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
 echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
 
+echo
+echo "============================================="
+echo "       patching external/libjxl"
+echo "============================================="
+
+if [ -f "external/libjxl/Android.bp" ]; then
+    sed -i 's/sdk_version: "none"/sdk_version: "current"/' external/libjxl/Android.bp
+    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp dipatch"
+else
+    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp tidak ditemukan"
+fi
+
+echo
+echo "============================================="
+echo "       checking external/libjxl"
+echo "============================================="
+
+if [ -f "external/libjxl/Android.bp" ]; then
+
+    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp"
+
+    echo
+    echo "Relevant properties:"
+    grep -nE \
+        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
+        external/libjxl/Android.bp \
+        || true
+
+else
+
+    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp missing"
+
+fi
+
 # ============================================================
 # ENVSETUP
 # ============================================================
