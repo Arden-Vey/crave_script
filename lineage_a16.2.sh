@@ -259,27 +259,6 @@ else
 fi
 
 # ============================================================
-# VENDOR CHECK
-# ============================================================
-
-echo
-echo "============================================="
-echo "             checking vendor"
-echo "============================================="
-
-if [ -d "vendor/xiaomi/tissot" ]; then
-    echo -e "${GREEN}[OK]${RESET} vendor/xiaomi/tissot"
-else
-    echo -e "${YELLOW}[WARNING]${RESET} vendor/xiaomi/tissot missing"
-fi
-
-if [ -d "vendor/xiaomi/msm8953-common" ]; then
-    echo -e "${GREEN}[OK]${RESET} vendor/xiaomi/msm8953-common"
-else
-    echo -e "${YELLOW}[WARNING]${RESET} vendor/xiaomi/msm8953-common missing"
-fi
-
-# ============================================================
 # LIBJXL DEBUG
 # ============================================================
 
