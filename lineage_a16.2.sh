@@ -177,6 +177,39 @@ else
 fi
 
 # ============================================================
+# PATCH: Hapus vendor firmware blobs untuk mainline
+# ============================================================
+
+echo
+echo "============================================="
+echo "   patching tissot_mainline/device.mk"
+echo "============================================="
+
+DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
+
+if [ -f "$DEVICE_MK" ]; then
+    # Comment blok PRODUCT_COPY_FILES yang mengandung vendor/xiaomi/msm8953-common
+    awk '
+        /^PRODUCT_COPY_FILES \+=/ { in_block=1; block="" }
+        in_block {
+            block = block $0 "\n"
+            if ($0 !~ /\\$/) {
+                if (block ~ /vendor\/xiaomi\/msm8953-common/) {
+                    gsub(/^/, "# ", block)
+                }
+                printf "%s", block
+                in_block=0
+                block=""
+            }
+            next
+        }
+        { print }
+    ' "$DEVICE_MK" > "$DEVICE_MK.tmp" && mv "$DEVICE_MK.tmp" "$DEVICE_MK"
+
+    echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment di $DEVICE_MK"
+fi
+
+# ============================================================
 # OPTIONAL DEVICE PROP
 # ============================================================
 
@@ -308,33 +341,6 @@ else
 
     echo -e "${YELLOW}[WARNING]${RESET} external/highway/Android.bp missing"
 
-fi
-
-# ============================================================
-# PATCH: Hapus vendor firmware blobs untuk mainline
-# ============================================================
-
-echo
-echo "============================================="
-echo "   patching tissot_mainline/device.mk"
-echo "============================================="
-
-DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
-
-if [ -f "$DEVICE_MK" ]; then
-    # Comment baris yang mengandung vendor/xiaomi/msm8953-common
-    sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
-    echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment di $DEVICE_MK"
-
-    # Verifikasi
-    if grep -q "vendor/xiaomi/msm8953-common" "$DEVICE_MK"; then
-        echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs!"
-        grep -n "vendor/xiaomi" "$DEVICE_MK"
-        exit 1
-    fi
-else
-    echo -e "${RED}[ERROR]${RESET} $DEVICE_MK tidak ditemukan"
-    exit 1
 fi
 
 # ============================================================
