@@ -311,6 +311,33 @@ else
 fi
 
 # ============================================================
+# PATCH: Hapus vendor firmware blobs untuk mainline
+# ============================================================
+
+echo
+echo "============================================="
+echo "   patching tissot_mainline/device.mk"
+echo "============================================="
+
+DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
+
+if [ -f "$DEVICE_MK" ]; then
+    # Comment baris yang mengandung vendor/xiaomi/msm8953-common
+    sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
+    echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment di $DEVICE_MK"
+
+    # Verifikasi
+    if grep -q "vendor/xiaomi/msm8953-common" "$DEVICE_MK"; then
+        echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs!"
+        grep -n "vendor/xiaomi" "$DEVICE_MK"
+        exit 1
+    fi
+else
+    echo -e "${RED}[ERROR]${RESET} $DEVICE_MK tidak ditemukan"
+    exit 1
+fi
+
+# ============================================================
 # PRE-BUILD SUMMARY
 # ============================================================
 
