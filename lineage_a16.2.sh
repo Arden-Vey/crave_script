@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 # ============================================================
 # COLORS
@@ -31,6 +30,8 @@ BUILD_HOSTNAME="crave"
 
 OUT_DIR="out/target/product/$DEVICE"
 
+DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
+
 # ============================================================
 # BANNER
 # ============================================================
@@ -39,8 +40,6 @@ banner() {
     clear
 
     echo -e "${CYAN}${BOLD}"
-    clear
-    
     echo "╔═════════════════════════════════════════════════════════════════╗"
     echo "║                                                                 ║"
     echo "║      ██╗     ██╗███╗   ██╗███████╗ █████╗  ██████╗ ███████╗     ║"
@@ -179,7 +178,7 @@ else
 fi
 
 # ============================================================
-# PATCH: Hapus vendor firmware blobs untuk mainline
+# PATCH: HAPUS VENDOR FIRMWARE BLOBS UNTUK MAINLINE
 # ============================================================
 
 echo
@@ -187,28 +186,63 @@ echo "============================================="
 echo "   patching tissot_mainline/device.mk"
 echo "============================================="
 
-DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
-
 if [ -f "$DEVICE_MK" ]; then
-    # Comment blok PRODUCT_COPY_FILES yang mengandung vendor/xiaomi/msm8953-common
-    awk '
-        /^PRODUCT_COPY_FILES \+=/ { in_block=1; block="" }
-        in_block {
-            block = block $0 "\n"
-            if ($0 !~ /\\$/) {
-                if (block ~ /vendor\/xiaomi\/msm8953-common/) {
-                    gsub(/^/, "# ", block)
-                }
-                printf "%s", block
-                in_block=0
-                block=""
-            }
-            next
-        }
-        { print }
-    ' "$DEVICE_MK" > "$DEVICE_MK.tmp" && mv "$DEVICE_MK.tmp" "$DEVICE_MK"
 
-    echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment di $DEVICE_MK"
+    # ------------------------------------------------------------
+    # 1. Backup file asli
+    # ------------------------------------------------------------
+    cp "$DEVICE_MK" "$DEVICE_MK.bak"
+    echo "Backup: $DEVICE_MK.bak"
+
+    # ------------------------------------------------------------
+    # 2. Comment SEMUA baris yang mengandung vendor/xiaomi/msm8953-common
+    #    (termasuk yang di dalam blok PRODUCT_COPY_FILES)
+    # ------------------------------------------------------------
+    sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
+
+    # ------------------------------------------------------------
+    # 3. Comment juga baris "PRODUCT_COPY_FILES += \" yang diikuti
+    #    baris comment vendor/xiaomi/msm8953-common
+    # ------------------------------------------------------------
+    sed -i '/^PRODUCT_COPY_FILES += \\$/{N;/^# .*vendor\/xiaomi\/msm8953-common/s/^/# /}' "$DEVICE_MK"
+
+    # ------------------------------------------------------------
+    # 4. Verifikasi: cek baris AKTIF (tanpa # di depan)
+    # ------------------------------------------------------------
+    ACTIVE_REFS=$(grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK" || true)
+
+    if [ -n "$ACTIVE_REFS" ]; then
+        echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
+        echo
+        echo "Baris aktif:"
+        echo "$ACTIVE_REFS"
+        echo
+        echo "Semua referensi (termasuk yang di-comment):"
+        grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
+        echo
+        echo "Restore dari backup..."
+        mv "$DEVICE_MK.bak" "$DEVICE_MK"
+        exit 1
+    else
+        echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment di $DEVICE_MK"
+        echo -e "${GREEN}[OK]${RESET} verifikasi: tidak ada vendor blobs aktif"
+    fi
+
+    # ------------------------------------------------------------
+    # 5. Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
+    # ------------------------------------------------------------
+    EMPTY_COPY=$(grep -n "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK" || true)
+
+    if [ -n "$EMPTY_COPY" ]; then
+        echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong:"
+        echo "$EMPTY_COPY"
+        echo "Ini mungkin bikin error Makefile. Cek manual:"
+        echo "  $DEVICE_MK"
+    fi
+
+else
+    echo -e "${RED}[ERROR]${RESET} $DEVICE_MK tidak ditemukan"
+    exit 1
 fi
 
 # ============================================================
@@ -345,18 +379,28 @@ else
 
 fi
 
+# ============================================================
+# VENDOR COMMON VERIFICATION
+# ============================================================
+
+echo
 echo "===================================="
 echo "    Checking vendor/vendor-common   "
 echo "===================================="
 
-# buat pasttin klo udh gk ada vendor-common
+# Cek baris AKTIF (tanpa # di depan)
 if grep -q "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"; then
     echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
+    echo
+    echo "Baris aktif:"
+    grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"
+    echo
+    echo "Semua referensi (termasuk yang di-comment):"
     grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
     exit 1
 fi
 
-# pastikan gk ada PRODUCT_COPY_FILES += \ yang kosong
+# Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
 if grep -q "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK"; then
     echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong"
 fi
@@ -396,10 +440,13 @@ echo
 BUILD_START=$(date +%s)
 
 # ============================================================
-# BUILD
+# BUILD (TANPA set -e AGAR SCRIPT TIDAK BERHENTI DI ERROR)
 # ============================================================
 
+set +e
 mka bacon
+BUILD_STATUS=$?
+set -e
 
 # ============================================================
 # BUILD TIME
@@ -407,6 +454,33 @@ mka bacon
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
+
+# ============================================================
+# CEK STATUS BUILD
+# ============================================================
+
+if [ $BUILD_STATUS -ne 0 ]; then
+
+    echo
+    echo "============================================================"
+    echo "                    BUILD FAILED"
+    echo "============================================================"
+
+    echo
+    echo -e "${RED}${BOLD}Build failed with exit status: $BUILD_STATUS${RESET}"
+
+    echo
+    echo "Build time:"
+    echo "$BUILD_TIME seconds"
+
+    echo
+    echo "Cek log di:"
+    echo "  out/error.log"
+    echo "  out/verbose.log.gz"
+
+    exit $BUILD_STATUS
+
+fi
 
 # ============================================================
 # BUILD SUCCESS
