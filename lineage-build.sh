@@ -158,6 +158,10 @@ echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
 echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
 echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
 
+# ------------------------------------------------------------
+# PATCH external/libjxl
+# ------------------------------------------------------------
+
 echo
 echo "============================================="
 echo "       patching external/libjxl"
@@ -190,6 +194,81 @@ else
 
     echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp missing"
 
+fi
+
+# ------------------------------------------------------------
+# PATCH external/boringssl (fix libcrypto_static visibility)
+# ------------------------------------------------------------
+
+echo
+echo "============================================="
+echo "   patching external/boringssl visibility"
+echo "============================================="
+
+DEVICE_INIT_BP="device/mainline/generic/services/generic_init/Android.bp"
+BORINGSSL_BP="external/boringssl/Android.bp"
+GENERIC_INIT_VISIBILITY='"//device/mainline/generic/services/generic_init",'
+
+# --- OPSI 1: Ganti libcrypto_static -> libcrypto di generic_init ---
+if [ -f "$DEVICE_INIT_BP" ]; then
+    if grep -q "libcrypto_static" "$DEVICE_INIT_BP"; then
+        cp "$DEVICE_INIT_BP" "$DEVICE_INIT_BP.bak.$(date +%s)"
+        sed -i 's/\blibcrypto_static\b/libcrypto/g' "$DEVICE_INIT_BP"
+        echo -e "${GREEN}[OK]${RESET} libcrypto_static -> libcrypto di $DEVICE_INIT_BP"
+    else
+        echo -e "${GREEN}[OK]${RESET} Tidak ada libcrypto_static di $DEVICE_INIT_BP"
+    fi
+else
+    echo -e "${YELLOW}[WARNING]${RESET} $DEVICE_INIT_BP tidak ditemukan, skip Opsi 1"
+fi
+
+# --- OPSI 2: Tambahkan visibility whitelist di boringssl ---
+if [ -f "$BORINGSSL_BP" ]; then
+    if grep -q "device/mainline/generic/services/generic_init" "$BORINGSSL_BP"; then
+        echo -e "${GREEN}[OK]${RESET} Visibility sudah ada di $BORINGSSL_BP"
+    else
+        cp "$BORINGSSL_BP" "$BORINGSSL_BP.bak.$(date +%s)"
+
+        python3 - <<'PYEOF' || warn "Gagal patch visibility boringssl via python3"
+import re
+
+bp_file = "external/boringssl/Android.bp"
+target_visibility = '"//device/mainline/generic/services/generic_init",'
+
+with open(bp_file, "r") as f:
+    content = f.read()
+
+pattern = r'(name:\s*"libcrypto_static",)(.*?)(\n\})'
+match = re.search(pattern, content, re.DOTALL)
+
+if not match:
+    print("[WARN] Module libcrypto_static tidak ditemukan di Android.bp")
+    raise SystemExit(0)
+
+module_body = match.group(2)
+
+if "visibility:" in module_body:
+    new_body = re.sub(
+        r'(visibility:\s*\[)(.*?)(\])',
+        lambda m: m.group(1) + m.group(2) + "\n        " + target_visibility + "\n    " + m.group(3),
+        module_body,
+        flags=re.DOTALL
+    )
+    print("[INFO] Menambahkan ke visibility yang sudah ada")
+else:
+    new_body = module_body + "\n    visibility: [\n        " + target_visibility + "\n    ],"
+    print("[INFO] Membuat visibility baru")
+
+new_content = content[:match.start(2)] + new_body + content[match.end(2):]
+
+with open(bp_file, "w") as f:
+    f.write(new_content)
+
+print("[OK] Visibility berhasil ditambahkan ke libcrypto_static")
+PYEOF
+    fi
+else
+    echo -e "${YELLOW}[WARNING]${RESET} $BORINGSSL_BP tidak ditemukan, skip Opsi 2"
 fi
 
 # ============================================================
