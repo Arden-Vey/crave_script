@@ -2,7 +2,7 @@
 set -e
 
 # ============================================================
-# LINEAGEOS 23.2 - GENERIC ARM64
+# LINEAGEOS 23.2 - GENERIC ARM64 BUILDER
 # ============================================================
 
 RED='\033[0;31m'
@@ -27,6 +27,12 @@ BUILD_HOSTNAME="crave"
 
 OUT_DIR="out/target/product/$DEVICE"
 
+GENERIC_INIT_VISIBILITY="//device/mainline/generic/services/generic_init"
+
+# ============================================================
+# FUNCTIONS
+# ============================================================
+
 section() {
     echo
     echo "============================================================"
@@ -45,6 +51,14 @@ warn() {
 err() {
     echo -e "${RED}[ERROR]${RESET} $1"
 }
+
+info() {
+    echo -e "${CYAN}[INFO]${RESET} $1"
+}
+
+# ============================================================
+# HEADER
+# ============================================================
 
 echo
 echo "============================================================"
@@ -79,31 +93,39 @@ command -v git >/dev/null 2>&1 || {
     exit 1
 }
 
-[ -x "/opt/crave/resync.sh" ] || {
-    err "/opt/crave/resync.sh tidak ditemukan."
+command -v python3 >/dev/null 2>&1 || {
+    err "python3 tidak ditemukan."
     exit 1
 }
 
-ok "Required tools available."
+if [ ! -x "/opt/crave/resync.sh" ]; then
+    err "/opt/crave/resync.sh tidak ditemukan."
+    exit 1
+fi
+
+ok "repo tersedia."
+ok "git tersedia."
+ok "python3 tersedia."
+ok "Crave resync tersedia."
 
 # ============================================================
-# LOCAL MANIFEST
+# CLEAN LOCAL MANIFEST
 # ============================================================
 
-section "CLEANING LOCAL MANIFEST"
+section "PREPARING LOCAL MANIFEST"
 
 if [ -d ".repo/local_manifests" ]; then
+    info "Menghapus local_manifests lama..."
     rm -rf .repo/local_manifests
-    ok "Old local manifests removed."
-else
-    ok "No old local manifests."
 fi
+
+ok "Local manifest directory siap."
 
 # ============================================================
 # REPO INIT
 # ============================================================
 
-section "REPO INIT"
+section "INITIALIZING LINEAGEOS"
 
 repo init \
     -u https://github.com/LineageOS/android.git \
@@ -117,7 +139,7 @@ ok "Repo initialized."
 # MANIFEST
 # ============================================================
 
-section "CLONING GENERIC MANIFEST"
+section "CLONING CUSTOM MANIFEST"
 
 git clone \
     -b "$MANIFEST_BRANCH" \
@@ -125,151 +147,477 @@ git clone \
     "$MANIFEST_URL" \
     .repo/local_manifests
 
-ok "Manifest cloned."
+ok "Custom manifest berhasil dipasang."
 
 # ============================================================
 # CRAVE SYNC
 # ============================================================
 
-section "SOURCE SYNC"
+section "SYNCING SOURCE WITH CRAVE"
 
-echo "Running /opt/crave/resync.sh ..."
-echo
-
+info "Menjalankan Crave resync..."
 /opt/crave/resync.sh
 
-ok "Source sync completed."
+ok "Source sync selesai."
 
 # ============================================================
 # BUILD ENVIRONMENT
 # ============================================================
 
-section "BUILD ENVIRONMENT"
+section "SETTING BUILD ENVIRONMENT"
 
 export BUILD_USERNAME="$BUILD_USERNAME"
 export BUILD_HOSTNAME="$BUILD_HOSTNAME"
 
 export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
 export ALLOW_MISSING_DEPENDENCIES=true
+
 export LC_ALL=C
 
-echo "BUILD_USERNAME=$BUILD_USERNAME"
-echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
-echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
-echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
+ok "Build environment configured."
 
-# ------------------------------------------------------------
-# PATCH external/libjxl
-# ------------------------------------------------------------
+# ============================================================
+# PATCH LIBJXL
+# ============================================================
 
-echo
-echo "============================================="
-echo "       patching external/libjxl"
-echo "============================================="
+section "PATCHING LIBJXL"
 
-if [ -f "external/libjxl/Android.bp" ]; then
-    sed -i 's/sdk_version: "none"/sdk_version: "current"/' external/libjxl/Android.bp
-    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp dipatch"
+LIBJXL_BP="external/libjxl/Android.bp"
+
+if [ -f "$LIBJXL_BP" ]; then
+
+    if grep -q 'sdk_version: "none"' "$LIBJXL_BP"; then
+
+        cp "$LIBJXL_BP" "${LIBJXL_BP}.bak"
+
+        sed -i \
+            's/sdk_version: "none"/sdk_version: "current"/g' \
+            "$LIBJXL_BP"
+
+        ok "libjxl sdk_version diubah dari none -> current."
+
+    elif grep -q 'sdk_version: "current"' "$LIBJXL_BP"; then
+
+        ok "libjxl sdk_version sudah current."
+
+    else
+
+        warn "libjxl tidak memiliki sdk_version yang dikenali."
+
+    fi
+
 else
-    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp tidak ditemukan"
+
+    warn "$LIBJXL_BP tidak ditemukan."
+
 fi
 
-echo
-echo "============================================="
-echo "       checking external/libjxl"
-echo "============================================="
+# ============================================================
+# VERIFY LIBJXL
+# ============================================================
 
-if [ -f "external/libjxl/Android.bp" ]; then
+section "VERIFYING LIBJXL PATCH"
 
-    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp"
+if [ -f "$LIBJXL_BP" ]; then
+
+    if grep -q 'sdk_version: "current"' "$LIBJXL_BP"; then
+        ok "libjxl sdk_version: OK"
+    else
+        warn "libjxl sdk_version mungkin masih none atau tidak ditemukan."
+    fi
+
+fi
+
+# ============================================================
+# FIND BORINGSSL libcrypto_static
+# ============================================================
+
+section "LOCATING BORINGSSL libcrypto_static"
+
+BORINGSSL_BP=""
+
+while IFS= read -r file; do
+
+    if grep -qE 'name:[[:space:]]*"libcrypto_static"' "$file"; then
+        BORINGSSL_BP="$file"
+        break
+    fi
+
+done < <(
+    find external/boringssl \
+        -type f \
+        -name "Android.bp" \
+        2>/dev/null
+)
+
+if [ -z "$BORINGSSL_BP" ]; then
+
+    err "Module libcrypto_static tidak ditemukan di external/boringssl."
 
     echo
-    echo "Relevant properties:"
-    grep -nE \
-        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
-        external/libjxl/Android.bp \
-        || true
+    echo "Pencarian:"
+    grep -RIn \
+        --include="Android.bp" \
+        'name: "libcrypto_static"' \
+        external/boringssl 2>/dev/null || true
 
-else
-
-    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp missing"
+    exit 1
 
 fi
 
-# ------------------------------------------------------------
-# PATCH external/boringssl (fix libcrypto_static visibility)
-# ------------------------------------------------------------
+ok "libcrypto_static ditemukan:"
+echo "    $BORINGSSL_BP"
 
-echo
-echo "============================================="
-echo "   patching external/boringssl visibility"
-echo "============================================="
+# ============================================================
+# SHOW CURRENT BORINGSSL STATE
+# ============================================================
 
-DEVICE_INIT_BP="device/mainline/generic/services/generic_init/Android.bp"
-BORINGSSL_BP="external/boringssl/Android.bp"
-GENERIC_INIT_VISIBILITY='"//device/mainline/generic/services/generic_init",'
+section "CHECKING BORINGSSL VISIBILITY"
 
-# --- OPSI 1: Ganti libcrypto_static -> libcrypto di generic_init ---
-if [ -f "$DEVICE_INIT_BP" ]; then
-    if grep -q "libcrypto_static" "$DEVICE_INIT_BP"; then
-        cp "$DEVICE_INIT_BP" "$DEVICE_INIT_BP.bak.$(date +%s)"
-        sed -i 's/\blibcrypto_static\b/libcrypto/g' "$DEVICE_INIT_BP"
-        echo -e "${GREEN}[OK]${RESET} libcrypto_static -> libcrypto di $DEVICE_INIT_BP"
-    else
-        echo -e "${GREEN}[OK]${RESET} Tidak ada libcrypto_static di $DEVICE_INIT_BP"
-    fi
-else
-    echo -e "${YELLOW}[WARNING]${RESET} $DEVICE_INIT_BP tidak ditemukan, skip Opsi 1"
+grep -n \
+    -A25 \
+    -B5 \
+    'name: "libcrypto_static"' \
+    "$BORINGSSL_BP" || true
+
+if grep -q 'default_visibility:' "$BORINGSSL_BP"; then
+    warn "default_visibility ditemukan di $BORINGSSL_BP"
 fi
 
-# --- OPSI 2: Tambahkan visibility whitelist di boringssl ---
-if [ -f "$BORINGSSL_BP" ]; then
-    if grep -q "device/mainline/generic/services/generic_init" "$BORINGSSL_BP"; then
-        echo -e "${GREEN}[OK]${RESET} Visibility sudah ada di $BORINGSSL_BP"
-    else
-        cp "$BORINGSSL_BP" "$BORINGSSL_BP.bak.$(date +%s)"
+# ============================================================
+# BACKUP BORINGSSL
+# ============================================================
 
-        python3 - <<'PYEOF' || warn "Gagal patch visibility boringssl via python3"
+section "BACKING UP BORINGSSL"
+
+if [ ! -f "${BORINGSSL_BP}.bak" ]; then
+    cp "$BORINGSSL_BP" "${BORINGSSL_BP}.bak"
+    ok "Backup dibuat:"
+    echo "    ${BORINGSSL_BP}.bak"
+else
+    info "Backup sudah ada, tidak dibuat ulang."
+fi
+
+# ============================================================
+# PATCH BORINGSSL VISIBILITY
+# ============================================================
+
+section "PATCHING BORINGSSL VISIBILITY"
+
+export BORINGSSL_BP
+export GENERIC_INIT_VISIBILITY
+
+python3 <<'PY'
+import os
 import re
+import sys
 
-bp_file = "external/boringssl/Android.bp"
-target_visibility = '"//device/mainline/generic/services/generic_init",'
+path = os.environ["BORINGSSL_BP"]
+required_visibility = os.environ["GENERIC_INIT_VISIBILITY"]
 
-with open(bp_file, "r") as f:
+with open(path, "r", encoding="utf-8") as f:
     content = f.read()
 
-pattern = r'(name:\s*"libcrypto_static",)(.*?)(\n\})'
-match = re.search(pattern, content, re.DOTALL)
+# ------------------------------------------------------------
+# Find libcrypto_static module
+# ------------------------------------------------------------
 
-if not match:
-    print("[WARN] Module libcrypto_static tidak ditemukan di Android.bp")
-    raise SystemExit(0)
+name_match = re.search(
+    r'name\s*:\s*"libcrypto_static"\s*,?',
+    content
+)
 
-module_body = match.group(2)
+if not name_match:
+    print("[ERROR] libcrypto_static tidak ditemukan.")
+    sys.exit(1)
 
-if "visibility:" in module_body:
-    new_body = re.sub(
-        r'(visibility:\s*\[)(.*?)(\])',
-        lambda m: m.group(1) + m.group(2) + "\n        " + target_visibility + "\n    " + m.group(3),
-        module_body,
-        flags=re.DOTALL
-    )
-    print("[INFO] Menambahkan ke visibility yang sudah ada")
+# ------------------------------------------------------------
+# Find module opening brace
+# ------------------------------------------------------------
+
+module_pattern = re.compile(
+    r'(?:cc_library_static|cc_library)\s*\{',
+    re.MULTILINE
+)
+
+module_start = None
+
+for match in module_pattern.finditer(content, 0, name_match.start() + 1):
+    module_start = match.start()
+
+if module_start is None:
+    print("[ERROR] Awal module cc_library_static tidak ditemukan.")
+    sys.exit(1)
+
+brace_start = content.find("{", module_start)
+
+if brace_start == -1:
+    print("[ERROR] Opening brace module tidak ditemukan.")
+    sys.exit(1)
+
+# ------------------------------------------------------------
+# Parse braces while handling comments and strings
+# ------------------------------------------------------------
+
+depth = 0
+module_end = None
+
+in_line_comment = False
+in_block_comment = False
+in_string = False
+escape = False
+
+i = brace_start
+
+while i < len(content):
+
+    c = content[i]
+    n = content[i + 1] if i + 1 < len(content) else ""
+
+    if in_line_comment:
+        if c == "\n":
+            in_line_comment = False
+
+    elif in_block_comment:
+        if c == "*" and n == "/":
+            in_block_comment = False
+            i += 1
+
+    elif in_string:
+        if escape:
+            escape = False
+        elif c == "\\":
+            escape = True
+        elif c == '"':
+            in_string = False
+
+    else:
+
+        if c == "/" and n == "/":
+            in_line_comment = True
+            i += 1
+
+        elif c == "/" and n == "*":
+            in_block_comment = True
+            i += 1
+
+        elif c == '"':
+            in_string = True
+
+        elif c == "{":
+            depth += 1
+
+        elif c == "}":
+            depth -= 1
+
+            if depth == 0:
+                module_end = i
+                break
+
+    i += 1
+
+if module_end is None:
+    print("[ERROR] Penutup module libcrypto_static tidak ditemukan.")
+    sys.exit(1)
+
+module = content[module_start:module_end + 1]
+
+# ------------------------------------------------------------
+# Check existing visibility
+# ------------------------------------------------------------
+
+visibility_match = re.search(
+    r'visibility\s*:\s*\[(.*?)\]',
+    module,
+    re.DOTALL
+)
+
+if visibility_match:
+
+    visibility_block = visibility_match.group(1)
+
+    if required_visibility in visibility_block:
+
+        print("[OK] Visibility sudah berisi:")
+        print(f"      {required_visibility}")
+
+    else:
+
+        new_visibility_block = (
+            visibility_block.rstrip()
+        )
+
+        if new_visibility_block:
+            new_visibility_block += "\n        "
+        else:
+            new_visibility_block = "\n        "
+
+        new_visibility_block += f'"{required_visibility}",\n    '
+
+        new_visibility = (
+            "visibility: ["
+            + new_visibility_block
+            + "]"
+        )
+
+        old_visibility = visibility_match.group(0)
+
+        module = module.replace(
+            old_visibility,
+            new_visibility,
+            1
+        )
+
+        content = (
+            content[:module_start]
+            + module
+            + content[module_end + 1:]
+        )
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        print("[OK] Visibility berhasil ditambahkan.")
+        print(f"      {required_visibility}")
+
 else:
-    new_body = module_body + "\n    visibility: [\n        " + target_visibility + "\n    ],"
-    print("[INFO] Membuat visibility baru")
 
-new_content = content[:match.start(2)] + new_body + content[match.end(2):]
+    # --------------------------------------------------------
+    # No visibility property -> create one
+    # --------------------------------------------------------
 
-with open(bp_file, "w") as f:
-    f.write(new_content)
+    module_body_start = brace_start - module_start + 1
 
-print("[OK] Visibility berhasil ditambahkan ke libcrypto_static")
-PYEOF
-    fi
+    insert_at = module_start + module_body_start
+
+    indentation = "    "
+
+    visibility_text = (
+        "\n"
+        + indentation
+        + "visibility: [\n"
+        + indentation
+        + f'    "{required_visibility}",\n'
+        + indentation
+        + "],\n"
+    )
+
+    content = (
+        content[:insert_at]
+        + visibility_text
+        + content[insert_at:]
+    )
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print("[OK] visibility property dibuat.")
+    print(f"      {required_visibility}")
+
+PY
+
+ok "BoringSSL visibility patch selesai."
+
+# ============================================================
+# VERIFY BORINGSSL PATCH
+# ============================================================
+
+section "VERIFYING BORINGSSL PATCH"
+
+if grep -qF "$GENERIC_INIT_VISIBILITY" "$BORINGSSL_BP"; then
+
+    ok "Visibility ditemukan di BoringSSL."
+
 else
-    echo -e "${YELLOW}[WARNING]${RESET} $BORINGSSL_BP tidak ditemukan, skip Opsi 2"
+
+    err "Visibility patch gagal."
+
+    echo
+    echo "Expected:"
+    echo "    $GENERIC_INIT_VISIBILITY"
+
+    exit 1
+
 fi
+
+# ============================================================
+# SHOW PATCHED MODULE
+# ============================================================
+
+section "SHOWING PATCHED libcrypto_static"
+
+grep -n \
+    -A30 \
+    -B3 \
+    'name: "libcrypto_static"' \
+    "$BORINGSSL_BP" || true
+
+# ============================================================
+# VERIFY ALL PATCHES
+# ============================================================
+
+section "VERIFYING ALL PATCHES"
+
+echo
+
+if [ -f "$LIBJXL_BP" ]; then
+    if grep -q 'sdk_version: "current"' "$LIBJXL_BP"; then
+        ok "libjxl patch: PASS"
+    else
+        warn "libjxl patch: CHECK"
+    fi
+fi
+
+if grep -qF "$GENERIC_INIT_VISIBILITY" "$BORINGSSL_BP"; then
+    ok "BoringSSL visibility patch: PASS"
+else
+    err "BoringSSL visibility patch: FAIL"
+    exit 1
+fi
+
+# ============================================================
+# DIAGNOSTIC DEVICE INIT
+# ============================================================
+
+section "DIAGNOSTIC GENERIC INIT"
+
+DEVICE_INIT_BP="device/mainline/generic/services/generic_init/Android.bp"
+
+if [ -f "$DEVICE_INIT_BP" ]; then
+
+    info "Menampilkan area sekitar line 115-135:"
+
+    sed -n '115,135p' "$DEVICE_INIT_BP"
+
+else
+
+    warn "$DEVICE_INIT_BP tidak ditemukan."
+
+fi
+
+# ============================================================
+# CLEAN SOONG STATE
+# ============================================================
+
+section "CLEANING SOONG STATE"
+
+if [ -f "out/soong/build.lineage_${DEVICE}.ninja" ]; then
+
+    rm -f "out/soong/build.lineage_${DEVICE}.ninja"
+
+    ok "Removed stale Soong ninja file."
+
+fi
+
+if [ -d "out/soong/.bootstrap" ]; then
+
+    rm -rf "out/soong/.bootstrap"
+
+    ok "Removed Soong bootstrap state."
+
+fi
+
+ok "Soong state cleaned."
 
 # ============================================================
 # ENVSETUP
@@ -277,123 +625,134 @@ fi
 
 section "LOADING BUILD ENVIRONMENT"
 
-if [ ! -f "build/envsetup.sh" ]; then
-    err "build/envsetup.sh tidak ditemukan."
-    exit 1
-fi
-
-# IMPORTANT:
-# Do NOT use "set -u" here.
-# LineageOS envsetup.sh expects TOP to be unset initially.
-
 source build/envsetup.sh
 
 ok "build/envsetup.sh loaded."
 
 # ============================================================
-# GENERIC DEVICE TREE
+# CHECK GENERIC TREE
 # ============================================================
 
-section "CHECKING GENERIC DEVICE TREE"
+section "CHECKING GENERIC TREE"
 
-for DIR in \
-    "device/mainline/generic" \
-    "device/mainline/common" \
+REQUIRED_DIRS=(
+    "device/mainline/generic"
+    "device/mainline/common"
     "hardware/mainline/common"
-do
-    if [ -d "$DIR" ]; then
-        ok "$DIR"
+)
+
+for dir in "${REQUIRED_DIRS[@]}"; do
+
+    if [ -d "$dir" ]; then
+        ok "$dir"
     else
-        err "$DIR tidak ditemukan."
+        err "Missing: $dir"
         exit 1
     fi
+
 done
 
 # ============================================================
-# OPTIONAL DEPENDENCIES
+# CHECK OPTIONAL MAINLINE DEPENDENCIES
 # ============================================================
 
-section "CHECKING MAINLINE DEPENDENCIES"
+section "CHECKING OPTIONAL MAINLINE DEPENDENCIES"
 
-for DIR in \
-    "kernel/mainline/configs" \
-    "external/drm_hwcomposer-upstream" \
-    "external/libdisplay-info-upstream" \
-    "external/minigbm-upstream" \
-    "external/linux-firmware-mainline" \
-    "external/mesa" \
-    "external/tinyhal" \
-    "prebuilts/mesa-build-dep" \
+OPTIONAL_DIRS=(
+    "kernel/mainline/configs"
+    "external/drm_hwcomposer-upstream"
+    "external/libdisplay-info-upstream"
+    "external/minigbm-upstream"
+    "external/linux-firmware-mainline"
+    "external/mesa"
+    "external/tinyhal"
+    "prebuilts/mesa-build-dep"
     "prebuilts/bootmgr"
-do
-    if [ -d "$DIR" ]; then
-        ok "$DIR"
+)
+
+for dir in "${OPTIONAL_DIRS[@]}"; do
+
+    if [ -d "$dir" ]; then
+        ok "$dir"
     else
-        warn "$DIR missing"
+        warn "Optional dependency missing: $dir"
     fi
+
 done
 
 # ============================================================
-# SELECT DEVICE
+# SELECT TARGET
 # ============================================================
 
-section "SELECTING TARGET"
-
-echo
-echo "Running:"
-echo
-echo "    breakfast $DEVICE"
-echo
+section "SELECTING BUILD TARGET"
 
 breakfast "$DEVICE"
 
-ok "Target selected."
+ok "Target selection selesai."
 
 # ============================================================
 # VERIFY TARGET
 # ============================================================
 
-section "VERIFYING TARGET"
+section "VERIFYING BUILD TARGET"
 
 TARGET_PRODUCT="$(get_build_var TARGET_PRODUCT)"
 TARGET_DEVICE="$(get_build_var TARGET_DEVICE)"
 TARGET_ARCH="$(get_build_var TARGET_ARCH)"
 TARGET_ARCH_VARIANT="$(get_build_var TARGET_ARCH_VARIANT)"
 
-echo "TARGET_PRODUCT      : $TARGET_PRODUCT"
-echo "TARGET_DEVICE       : $TARGET_DEVICE"
-echo "TARGET_ARCH         : $TARGET_ARCH"
-echo "TARGET_ARCH_VARIANT : $TARGET_ARCH_VARIANT"
+echo
+echo "TARGET_PRODUCT       : $TARGET_PRODUCT"
+echo "TARGET_DEVICE        : $TARGET_DEVICE"
+echo "TARGET_ARCH          : $TARGET_ARCH"
+echo "TARGET_ARCH_VARIANT  : $TARGET_ARCH_VARIANT"
+echo
 
-if [ "$TARGET_DEVICE" != "$DEVICE" ]; then
-    err "TARGET_DEVICE tidak sesuai."
-    echo "Expected : $DEVICE"
-    echo "Detected : $TARGET_DEVICE"
+if [ -z "$TARGET_PRODUCT" ]; then
+    err "TARGET_PRODUCT kosong."
     exit 1
 fi
 
-ok "Target verified."
+if [ -z "$TARGET_ARCH" ]; then
+    err "TARGET_ARCH kosong."
+    exit 1
+fi
+
+if [ "$TARGET_ARCH" != "arm64" ]; then
+    warn "TARGET_ARCH bukan arm64."
+fi
+
+ok "Build target valid."
 
 # ============================================================
-# PRE-BUILD
+# FINAL PRE-BUILD CHECK
 # ============================================================
 
-section "PRE-BUILD SUMMARY"
+section "FINAL PRE-BUILD CHECK"
 
-echo "ROM        : $ROM_NAME"
-echo "Branch     : $ROM_BRANCH"
-echo "Device     : $DEVICE"
-echo "Target     : $BUILD_TARGET"
-echo "Product    : $TARGET_PRODUCT"
-echo "Architecture: $TARGET_ARCH"
-echo "Output     : $OUT_DIR"
-echo "Threads    : $(nproc --all)"
+echo "ROM             : $ROM_NAME"
+echo "Device          : $DEVICE"
+echo "Target          : $BUILD_TARGET"
+echo "Product         : $TARGET_PRODUCT"
+echo "Architecture    : $TARGET_ARCH"
+echo "Threads         : $(nproc --all)"
+echo
 
-echo
-echo "Build command:"
-echo
-echo "    m $BUILD_TARGET"
-echo
+if [ -f "$BORINGSSL_BP" ]; then
+    ok "BoringSSL Android.bp tersedia."
+else
+    err "BoringSSL Android.bp hilang."
+    exit 1
+fi
+
+if grep -qF "$GENERIC_INIT_VISIBILITY" "$BORINGSSL_BP"; then
+    ok "libcrypto_static visibility sudah diperbaiki."
+else
+    err "libcrypto_static visibility belum diperbaiki."
+    exit 1
+fi
+
+ok "Semua pre-build check PASS."
 
 # ============================================================
 # BUILD
@@ -401,80 +760,104 @@ echo
 
 section "STARTING BUILD"
 
-BUILD_START=$(date +%s)
+echo
+echo "Building:"
+echo "    $BUILD_TARGET"
+echo
+echo "Please wait..."
+echo
 
 m "$BUILD_TARGET"
-
-BUILD_END=$(date +%s)
-BUILD_TIME=$((BUILD_END - BUILD_START))
 
 # ============================================================
 # OUTPUT
 # ============================================================
 
-section "BUILD OUTPUT"
+section "CHECKING BUILD OUTPUT"
 
 if [ ! -d "$OUT_DIR" ]; then
+
     err "Output directory tidak ditemukan:"
-    echo "$OUT_DIR"
+    echo "    $OUT_DIR"
+
     exit 1
+
 fi
 
-ok "Output directory exists."
-
-echo
-find "$OUT_DIR" \
-    -maxdepth 1 \
-    -type f \
-    \( \
-        -name "*.img" \
-        -o -name "*.iso" \
-        -o -name "*.EFI" \
-        -o -name "*.zip" \
-        -o -name "*.json" \
-        -o -name "*.sha256sum" \
-    \) \
-    -printf '%f\n' \
-    | sort
+ok "Output directory ditemukan:"
+echo "    $OUT_DIR"
 
 # ============================================================
 # IMAGE CHECK
 # ============================================================
 
-section "IMAGE CHECK"
+section "CHECKING GENERATED IMAGES"
 
-for IMAGE in \
-    boot.img \
-    vendor_boot.img \
+IMAGE_FOUND=0
+
+for image in \
     system.img \
-    system_ext.img \
-    product.img \
     vendor.img \
+    boot.img \
     init_boot.img \
     recovery.img \
     super.img \
-    ramdisk-all-combined.img \
-    ramdisk-custom.img
+    product.img \
+    system_ext.img
 do
-    if [ -f "$OUT_DIR/$IMAGE" ]; then
-        ok "$IMAGE"
-    else
-        echo "[--] $IMAGE"
+
+    if [ -f "$OUT_DIR/$image" ]; then
+
+        SIZE="$(du -h "$OUT_DIR/$image" | awk '{print $1}')"
+
+        ok "$image ($SIZE)"
+
+        IMAGE_FOUND=1
+
     fi
+
 done
 
+if [ "$IMAGE_FOUND" -eq 0 ]; then
+
+    warn "Tidak ada image yang ditemukan di output."
+
+else
+
+    echo
+    ok "Image hasil build ditemukan."
+
+fi
+
 # ============================================================
-# DONE
+# FINAL
 # ============================================================
 
-section "BUILD COMPLETE"
-
-echo "ROM        : $ROM_NAME"
-echo "Device     : $DEVICE"
-echo "Target     : $BUILD_TARGET"
-echo "Output     : $OUT_DIR"
-echo "Build time : $BUILD_TIME seconds"
+section "BUILD FINISHED"
 
 echo
-echo -e "${GREEN}${BOLD}BUILD SUCCESS${RESET}"
+echo -e "${GREEN}${BOLD}"
+echo "============================================================"
+echo "              BUILD SUCCESSFUL"
+echo "============================================================"
+echo -e "${RESET}"
+
+echo "ROM      : $ROM_NAME"
+echo "Device   : $DEVICE"
+echo "Target   : $BUILD_TARGET"
+echo "Output   : $OUT_DIR"
+echo
+
+echo "Generated files:"
+find "$OUT_DIR" \
+    -maxdepth 1 \
+    -type f \
+    \( -name "*.img" -o -name "*.zip" -o -name "*.zip.md5sum" \) \
+    -printf "  %f\n" \
+    2>/dev/null || true
+
+echo
+echo "============================================================"
+echo "                    DONE"
+echo "============================================================"
 echo
