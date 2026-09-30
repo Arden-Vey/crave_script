@@ -3,6 +3,7 @@ set -e
 
 # ============================================================
 # LINEAGEOS 23.2 - GENERIC ARM64 BUILDER
+# WITH AUTO-DETECT & FIX DUPLICATE MODULES / FOLDERS
 # ============================================================
 
 RED='\033[0;31m'
@@ -28,6 +29,14 @@ BUILD_HOSTNAME="crave"
 OUT_DIR="out/target/product/$DEVICE"
 
 GENERIC_INIT_VISIBILITY="//device/mainline/generic/services/generic_init"
+
+# Daftar direktori yang TIDAK boleh memiliki Android.mk duplikat
+DEDUP_SCAN_DIRS=(
+    "external/mesa"
+    "external/mesa/android"
+    "hardware/mainline"
+    "device/mainline"
+)
 
 # ============================================================
 # FUNCTIONS
@@ -63,6 +72,7 @@ info() {
 echo
 echo "============================================================"
 echo "        LINEAGEOS 23.2 GENERIC ARM64 BUILDER"
+echo "        (with Auto-Fix Duplicate Modules)"
 echo "============================================================"
 echo
 
@@ -175,6 +185,176 @@ export ALLOW_MISSING_DEPENDENCIES=true
 export LC_ALL=C
 
 ok "Build environment configured."
+
+# ============================================================
+# [NEW] AUTO-DETECT & FIX DUPLICATE MODULES
+# ============================================================
+
+section "SCANNING FOR DUPLICATE MODULES / FOLDERS"
+
+# Fungsi untuk mendeteksi duplikasi module di Android.mk/Android.bp
+detect_duplicate_modules() {
+    local dir="$1"
+    local found_dup=0
+
+    if [ ! -d "$dir" ]; then
+        return 0
+    fi
+
+    # Cari semua file Android.mk/Android.bp
+    while IFS= read -r mkfile; do
+        [ -z "$mkfile" ] && continue
+
+        # Ambil semua LOCAL_MODULE / name:
+        local modules
+        modules=$(grep -hoE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*[^ ]+' "$mkfile" 2>/dev/null | awk '{print $NF}' | tr -d '"' | sort -u)
+
+        while IFS= read -r mod; do
+            [ -z "$mod" ] && continue
+
+            # Cari apakah module yang sama didefinisikan di file lain
+            local other_files
+            other_files=$(grep -rlE "LOCAL_MODULE[[:space:]]*:?=[[:space:]]*[\"']?$mod[\"']?([[:space:]]|$)" \
+                --include="Android.mk" \
+                --include="Android.bp" \
+                "$dir" 2>/dev/null | grep -v "^$mkfile$" || true)
+
+            if [ -n "$other_files" ]; then
+                warn "DUPLIKAT module '$mod' ditemukan:"
+                echo "    - $mkfile"
+                echo "$other_files" | while read -r f; do
+                    echo "    - $f"
+                done
+                found_dup=1
+            fi
+        done <<< "$modules"
+    done < <(find "$dir" -type f \( -name "Android.mk" -o -name "Android.bp" \) 2>/dev/null)
+
+    return $found_dup
+}
+
+# Fungsi untuk membersihkan duplikasi file Android.mk/Android.bp
+fix_duplicate_mk_files() {
+    local dir="$1"
+
+    if [ ! -d "$dir" ]; then
+        return 0
+    fi
+
+    # Cari file Android.mk yang berada di subfolder yang sama dengan Android.bp
+    # (biasanya menyebabkan duplikasi)
+    while IFS= read -r mkfile; do
+        local parent
+        parent="$(dirname "$mkfile")"
+
+        # Skip root Android.mk
+        [ "$parent" = "$dir" ] && continue
+
+        local bpfile="$parent/Android.bp"
+
+        if [ -f "$bpfile" ]; then
+            warn "Konflik: $mkfile dan $bpfile di folder yang sama."
+            info "Membackup dan menonaktifkan Android.mk duplikat..."
+
+            # Backup
+            if [ ! -f "${mkfile}.disabled" ]; then
+                mv "$mkfile" "${mkfile}.disabled"
+                ok "Dinonaktifkan: $mkfile -> ${mkfile}.disabled"
+            fi
+        fi
+    done < <(find "$dir" -type f -name "Android.mk" 2>/dev/null)
+}
+
+# Fungsi untuk membersihkan duplikasi folder (symlink atau copy)
+fix_duplicate_folders() {
+    local base_dir="$1"
+
+    if [ ! -d "$base_dir" ]; then
+        return 0
+    fi
+
+    # Deteksi folder dengan nama yang sama (case-insensitive)
+    find "$base_dir" -maxdepth 3 -type d 2>/dev/null | \
+        awk -F/ '{print tolower($NF)"|"$0}' | \
+        sort | \
+        awk -F'|' '
+        {
+            if ($1 == prev_key) {
+                print "DUPLIKAT FOLDER: " prev_path " <-> " $2
+            }
+            prev_key = $1
+            prev_path = $2
+        }' | while read -r line; do
+            if echo "$line" | grep -q "DUPLIKAT FOLDER"; then
+                warn "$line"
+            fi
+        done
+}
+
+# Jalankan deteksi & fix untuk setiap direktori target
+for d in "${DEDUP_SCAN_DIRS[@]}"; do
+    if [ -d "$d" ]; then
+        info "Scanning: $d"
+
+        detect_duplicate_modules "$d" || true
+        fix_duplicate_mk_files "$d" || true
+        fix_duplicate_folders "$d" || true
+
+        echo
+    fi
+done
+
+# --------------------------------------------
+# FIX KHUSUS: external/mesa/android/vulkan
+# --------------------------------------------
+
+section "FIXING MESA VULKAN DUPLICATE"
+
+MESA_ANDROID_DIR="external/mesa/android"
+
+if [ -d "$MESA_ANDROID_DIR" ]; then
+
+    # Cari definisi vulkan di Android.mk
+    MESA_MK="$MESA_ANDROID_DIR/Android.mk"
+
+    if [ -f "$MESA_MK" ]; then
+
+        VULKAN_COUNT=$(grep -cE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan' "$MESA_MK" 2>/dev/null || echo 0)
+
+        if [ "$VULKAN_COUNT" -gt 1 ]; then
+
+            warn "Module 'vulkan' didefinisikan $VULKAN_COUNT kali di $MESA_MK"
+
+            # Cek apakah ada include ganda
+            INCLUDE_COUNT=$(grep -cE 'include[[:space:]]+\$\(call[[:space:]]+all-makefiles-under' "$MESA_MK" 2>/dev/null || echo 0)
+
+            if [ "$INCLUDE_COUNT" -gt 1 ]; then
+                warn "Include ganda terdeteksi di $MESA_MK"
+            fi
+
+            info "Membackup $MESA_MK..."
+
+            if [ ! -f "${MESA_MK}.bak" ]; then
+                cp "$MESA_MK" "${MESA_MK}.bak"
+                ok "Backup: ${MESA_MK}.bak"
+            fi
+
+        else
+            ok "Tidak ada duplikasi 'vulkan' di $MESA_MK"
+        fi
+
+    else
+        info "$MESA_MK tidak ditemukan (mungkin pakai Android.bp saja)."
+    fi
+
+    # Cek apakah ada file .disabled yang tertinggal
+    find "$MESA_ANDROID_DIR" -name "*.disabled" 2>/dev/null | while read -r f; do
+        warn "File dinonaktifkan sebelumnya: $f"
+    done
+
+else
+    warn "$MESA_ANDROID_DIR tidak ditemukan."
+fi
 
 # ============================================================
 # PATCH LIBJXL
@@ -318,10 +498,7 @@ required_visibility = os.environ["GENERIC_INIT_VISIBILITY"]
 with open(path, "r", encoding="utf-8") as f:
     content = f.read()
 
-# ------------------------------------------------------------
 # Find libcrypto_static module
-# ------------------------------------------------------------
-
 name_match = re.search(
     r'name\s*:\s*"libcrypto_static"\s*,?',
     content
@@ -330,10 +507,6 @@ name_match = re.search(
 if not name_match:
     print("[ERROR] libcrypto_static tidak ditemukan.")
     sys.exit(1)
-
-# ------------------------------------------------------------
-# Find module opening brace
-# ------------------------------------------------------------
 
 module_pattern = re.compile(
     r'(?:cc_library_static|cc_library)\s*\{',
@@ -354,10 +527,6 @@ brace_start = content.find("{", module_start)
 if brace_start == -1:
     print("[ERROR] Opening brace module tidak ditemukan.")
     sys.exit(1)
-
-# ------------------------------------------------------------
-# Parse braces while handling comments and strings
-# ------------------------------------------------------------
 
 depth = 0
 module_end = None
@@ -422,10 +591,6 @@ if module_end is None:
 
 module = content[module_start:module_end + 1]
 
-# ------------------------------------------------------------
-# Check existing visibility
-# ------------------------------------------------------------
-
 visibility_match = re.search(
     r'visibility\s*:\s*\[(.*?)\]',
     module,
@@ -481,10 +646,6 @@ if visibility_match:
         print(f"      {required_visibility}")
 
 else:
-
-    # --------------------------------------------------------
-    # No visibility property -> create one
-    # --------------------------------------------------------
 
     module_body_start = brace_start - module_start + 1
 
@@ -617,6 +778,19 @@ if [ -d "out/soong/.bootstrap" ]; then
 
 fi
 
+# --------------------------------------------
+# [NEW] CLEAN STALE KATI CACHE
+# --------------------------------------------
+if [ -d "out/build.trace" ]; then
+    rm -rf "out/build.trace"
+    ok "Removed stale build.trace."
+fi
+
+if [ -f "out/.kati_stamp-*" ]; then
+    rm -f out/.kati_stamp-* 2>/dev/null || true
+    ok "Removed stale kati stamp."
+fi
+
 ok "Soong state cleaned."
 
 # ============================================================
@@ -679,6 +853,55 @@ for dir in "${OPTIONAL_DIRS[@]}"; do
     fi
 
 done
+
+# ============================================================
+# [NEW] PRE-BUILD DUPLICATE CHECK (FINAL)
+# ============================================================
+
+section "FINAL DUPLICATE MODULE CHECK"
+
+DUPLICATE_FOUND=0
+
+# Cek mesa Android.mk vs Android.bp
+if [ -f "external/mesa/android/Android.mk" ] && [ -f "external/mesa/android/Android.bp" ]; then
+    warn "external/mesa/android memiliki Android.mk DAN Android.bp"
+    warn "  -> berpotensi duplikasi module 'vulkan'"
+
+    if [ ! -f "external/mesa/android/Android.mk.disabled" ]; then
+        mv "external/mesa/android/Android.mk" "external/mesa/android/Android.mk.disabled"
+        ok "Android.mk dinonaktifkan (backup: Android.mk.disabled)"
+    fi
+
+    DUPLICATE_FOUND=1
+fi
+
+# Cek duplikasi module 'vulkan' di seluruh tree mesa
+VULKAN_DEFS=$(grep -rlE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' \
+    --include="Android.mk" \
+    external/mesa 2>/dev/null || true)
+
+VULKAN_COUNT=$(echo "$VULKAN_DEFS" | grep -c . || echo 0)
+
+if [ "$VULKAN_COUNT" -gt 1 ]; then
+    warn "Module 'vulkan' didefinisikan di $VULKAN_COUNT file:"
+    echo "$VULKAN_DEFS" | while read -r f; do
+        echo "    - $f"
+    done
+
+    # Nonaktifkan file duplikat (selain yang pertama)
+    echo "$VULKAN_DEFS" | tail -n +2 | while read -r f; do
+        if [ -f "$f" ] && [ ! -f "${f}.disabled" ]; then
+            mv "$f" "${f}.disabled"
+            ok "Dinonaktifkan: $f -> ${f}.disabled"
+        fi
+    done
+
+    DUPLICATE_FOUND=1
+fi
+
+if [ "$DUPLICATE_FOUND" -eq 0 ]; then
+    ok "Tidak ada duplikasi module terdeteksi."
+fi
 
 # ============================================================
 # SELECT TARGET
@@ -767,7 +990,35 @@ echo
 echo "Please wait..."
 echo
 
+# --------------------------------------------
+# [NEW] Jalankan build dengan fallback
+# --------------------------------------------
+set +e
 m "$BUILD_TARGET"
+BUILD_RESULT=$?
+set -e
+
+if [ "$BUILD_RESULT" -ne 0 ]; then
+
+    err "Build gagal dengan exit code $BUILD_RESULT"
+
+    echo
+    info "Mencoba membersihkan state dan build ulang..."
+
+    # Bersihkan kati cache
+    rm -f out/.kati_stamp-* 2>/dev/null || true
+    rm -rf out/soong/.bootstrap 2>/dev/null || true
+    rm -f out/soong/build.lineage_${DEVICE}.ninja 2>/dev/null || true
+
+    # Cek log error terakhir
+    if [ -f "out/error.log" ]; then
+        warn "Error log terakhir:"
+        tail -n 30 "out/error.log"
+    fi
+
+    info "Silakan cek error di atas, lalu jalankan ulang script."
+    exit 1
+fi
 
 # ============================================================
 # OUTPUT
