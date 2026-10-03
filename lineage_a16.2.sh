@@ -1,1216 +1,974 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
-###############################################################################
-# LineageOS 23.2 - Xiaomi Mi A1 (tissot)
-#
-# PREBUILT KERNEL BUILD
-#
-# Kernel:
-#   Image.gz-dtb
-#
-# Kernel source:
-#   DISABLED
-#
-# Prebuilt kernel:
-#   prebuilts/kernel/tissot/Image.gz-dtb
-#
-# Device:
-#   tissot_mainline
-#
-# Lunch:
-#   lineage_tissot_mainline-trunk_staging-userdebug
-#
-# Manifest:
-#   https://github.com/JBHPocong/lineage-tissot-manifest.git
-#   branch: main
-#
-# Crave:
-#   Used for repo sync and build
-#
-###############################################################################
+# ============================================================
+# COLORS
+# ============================================================
 
-set -Eeuo pipefail
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+RESET='\033[0m'
 
-###############################################################################
+# ============================================================
 # CONFIG
-###############################################################################
+# ============================================================
 
+ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
+
+DEVICE="tissot_mainline"
+LUNCH_TARGET="lineage_tissot_mainline-trunk_staging-userdebug"
 
 MANIFEST_URL="https://github.com/JBHPocong/lineage-tissot-manifest.git"
 MANIFEST_BRANCH="main"
 
-DEVICE_DIR="device/xiaomi/mi89xx-mainline"
-DEVICE_NAME="tissot_mainline"
+BUILD_USERNAME="Arden-Vey"
+BUILD_HOSTNAME="crave"
 
-BOARD_CONFIG="${DEVICE_DIR}/tissot_mainline/BoardConfig.mk"
+OUT_DIR="out/target/product/$DEVICE"
+
+DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
+
+# ============================================================
+# PREBUILT KERNEL CONFIG
+# ============================================================
+
+BOARD_CONFIG="device/xiaomi/mi89xx-mainline/tissot_mainline/BoardConfig.mk"
 
 PREBUILT_KERNEL_DIR="prebuilts/kernel/tissot"
-PREBUILT_KERNEL="${PREBUILT_KERNEL_DIR}/Image.gz-dtb"
+PREBUILT_KERNEL="$PREBUILT_KERNEL_DIR/Image.gz-dtb"
 
-KERNEL_SOURCE_PATH="kernel/mainline/msm8953-mainline"
+PREBUILT_KERNEL_PROJECT="JBHPocong/lineage-tissot-manifest"
+PREBUILT_KERNEL_BRANCH="Image.gz-dtb"
 
-KERNEL_SOURCE_PROJECT="msm8953-mainline/linux"
+# ============================================================
+# BANNER
+# ============================================================
 
-KERNEL_CONFIG_PROJECT="android_kernel_mainline_configs"
-KERNEL_CONFIG_PATH="kernel/mainline/configs"
+banner() {
+    clear
 
-FIRMWARE_PATH="vendor/firmware/bq-bardockpro"
-
-LUNCH_TARGET="lineage_tissot_mainline-trunk_staging-userdebug"
-
-OUT_DIR="out"
-PRODUCT_OUT="${OUT_DIR}/target/product/${DEVICE_NAME}"
-
-LOG_DIR="${OUT_DIR}/prebuilt-kernel-build-logs"
-
-TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
-
-LOG_FILE="${LOG_DIR}/build-${TIMESTAMP}.log"
-
-###############################################################################
-# COLORS
-###############################################################################
-
-if [[ -t 1 ]]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    CYAN='\033[0;36m'
-    RESET='\033[0m'
-else
-    RED=''
-    GREEN=''
-    YELLOW=''
-    BLUE=''
-    CYAN=''
-    RESET=''
-fi
-
-###############################################################################
-# LOGGING
-###############################################################################
-
-mkdir -p "${LOG_DIR}"
-
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
-###############################################################################
-# HELPERS
-###############################################################################
-
-info() {
-    echo -e "${CYAN}[INFO]${RESET} $*"
+    echo -e "${CYAN}${BOLD}"
+    echo "╔═════════════════════════════════════════════════════════════════╗"
+    echo "║                                                                 ║"
+    echo "║      ██╗     ██╗███╗   ██╗███████╗ █████╗  ██████╗ ███████╗     ║"
+    echo "║      ██║     ██║████╗  ██║██╔════╝██╔══██╗██╔════╝ ██╔════╝     ║"
+    echo "║      ██║     ██║██╔██╗ ██║█████╗  ███████║██║  ███╗█████╗       ║"
+    echo "║      ██║     ██║██║╚██╗██║██╔══╝  ██╔══██║██║   ██║██╔══╝       ║"
+    echo "║      ███████╗██║██║ ╚████║███████╗██║  ██║╚██████╔╝███████╗     ║"
+    echo "║      ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ║"
+    echo "║                                                                 ║"
+    echo "║                  T I S S O T   M A I N L I N E                  ║"
+    echo "║                Automated Release Builder                        ║"
+    echo "║                                                                 ║"
+    echo "╠═════════════════════════════════════════════════════════════════╣"
+    echo "║  ROM        : LineageOS 23.2                                    ║"
+    echo "║  Device     : tissot_mainline                                   ║"
+    echo "║  Branch     : lineage-23.2                                      ║"
+    echo "║  Build      : userdebug                                         ║"
+    echo "║  Kernel     : PREBUILT Image.gz-dtb                             ║"
+    echo "╚═════════════════════════════════════════════════════════════════╝"
+    echo -e "${RESET}"
 }
 
-ok() {
-    echo -e "${GREEN}[ OK ]${RESET} $*"
-}
-
-warn() {
-    echo -e "${YELLOW}[WARN]${RESET} $*"
-}
-
-error() {
-    echo -e "${RED}[ERROR]${RESET} $*"
-}
-
-die() {
-    error "$*"
-    echo
-    error "Log:"
-    echo "  ${LOG_FILE}"
-    exit 1
-}
-
-section() {
-    echo
-    echo "============================================================"
-    echo "$*"
-    echo "============================================================"
-}
-
-require_cmd() {
-    command -v "$1" >/dev/null 2>&1 || die "Command tidak ditemukan: $1"
-}
-
-###############################################################################
-# ERROR HANDLER
-###############################################################################
-
-trap 'error "Script gagal pada line ${LINENO}: ${BASH_COMMAND}"' ERR
-
-###############################################################################
-# BASIC CHECK
-###############################################################################
-
-section "CHECK ENVIRONMENT"
-
-if [[ ! -d ".repo" ]]; then
-    die "Script harus dijalankan dari root source LineageOS."
-fi
-
-require_cmd git
-require_cmd awk
-require_cmd sed
-require_cmd grep
-require_cmd find
-require_cmd sha256sum
-
-if command -v crave >/dev/null 2>&1; then
-    ok "Crave ditemukan: $(command -v crave)"
-else
-    die "crave tidak ditemukan."
-fi
-
-ok "Root source: $(pwd)"
-ok "Branch ROM: ${ROM_BRANCH}"
-ok "Device: ${DEVICE_NAME}"
-ok "BoardConfig: ${BOARD_CONFIG}"
-
-###############################################################################
-# CHECK DEVICE TREE
-###############################################################################
-
-section "CHECK DEVICE TREE"
-
-[[ -d "${DEVICE_DIR}" ]] \
-    || die "Device tree tidak ditemukan: ${DEVICE_DIR}"
-
-[[ -f "${BOARD_CONFIG}" ]] \
-    || die "BoardConfig tidak ditemukan: ${BOARD_CONFIG}"
-
-ok "Device tree ditemukan"
-ok "BoardConfig ditemukan"
-
-###############################################################################
-# LOCAL MANIFEST DIRECTORY
-###############################################################################
-
-section "PREPARE LOCAL MANIFEST"
-
-LOCAL_MANIFEST_DIR=".repo/local_manifests"
-
-mkdir -p "${LOCAL_MANIFEST_DIR}"
-
-###############################################################################
-# FIND MANIFEST FILE
-###############################################################################
-
-MANIFEST_FILE=""
-
-if [[ -f "${LOCAL_MANIFEST_DIR}/tissot.xml" ]]; then
-    MANIFEST_FILE="${LOCAL_MANIFEST_DIR}/tissot.xml"
-elif [[ -f "${LOCAL_MANIFEST_DIR}/lineage-tissot.xml" ]]; then
-    MANIFEST_FILE="${LOCAL_MANIFEST_DIR}/lineage-tissot.xml"
-else
-    info "Manifest tissot belum ditemukan."
-
-    TEMP_MANIFEST="/tmp/lineage-tissot-manifest-${TIMESTAMP}"
-
-    rm -rf "${TEMP_MANIFEST}"
-
-    git clone \
-        --depth=1 \
-        --branch "${MANIFEST_BRANCH}" \
-        "${MANIFEST_URL}" \
-        "${TEMP_MANIFEST}"
-
-    FOUND_MANIFEST="$(find "${TEMP_MANIFEST}" -maxdepth 2 -type f -name '*.xml' | head -n 1 || true)"
-
-    [[ -n "${FOUND_MANIFEST}" ]] \
-        || die "Tidak menemukan XML manifest di repository."
-
-    MANIFEST_FILE="${LOCAL_MANIFEST_DIR}/$(basename "${FOUND_MANIFEST}")"
-
-    cp -f "${FOUND_MANIFEST}" "${MANIFEST_FILE}"
-
-    ok "Manifest diambil dari repository."
-fi
-
-ok "Manifest: ${MANIFEST_FILE}"
-
-###############################################################################
-# BACKUP MANIFEST
-###############################################################################
-
-MANIFEST_BACKUP="${MANIFEST_FILE}.backup-${TIMESTAMP}"
-
-cp -f "${MANIFEST_FILE}" "${MANIFEST_BACKUP}"
-
-ok "Backup manifest:"
-echo "  ${MANIFEST_BACKUP}"
-
-###############################################################################
-# PATCH MANIFEST
-###############################################################################
-
-section "PATCH MANIFEST"
-
-python3 - "${MANIFEST_FILE}" <<'PY'
-import sys
-import re
-from pathlib import Path
-
-manifest = Path(sys.argv[1])
-
-text = manifest.read_text()
-
-KERNEL_PROJECT = "msm8953-mainline/linux"
-KERNEL_PATH = "kernel/mainline/msm8953-mainline"
-
-PREBUILT_PROJECT = "JBHPocong/lineage-tissot-manifest"
-PREBUILT_PATH = "prebuilts/kernel/tissot"
-PREBUILT_REV = "Image.gz-dtb"
-
-###############################################################################
-# Remove old kernel source project
-###############################################################################
-
-patterns = [
-    rf'\s*<project\b[^>]*\bname="{re.escape(KERNEL_PROJECT)}"[^>]*/>\s*',
-    rf'\s*<project\b[^>]*\bpath="{re.escape(KERNEL_PATH)}"[^>]*/>\s*',
-]
-
-for pattern in patterns:
-    text = re.sub(pattern, "\n", text, flags=re.MULTILINE)
-
-###############################################################################
-# Remove an existing prebuilt project with same path/name
-###############################################################################
-
-project_blocks = re.findall(
-    r'<project\b.*?(?:/>|</project>)',
-    text,
-    flags=re.DOTALL
-)
-
-for block in project_blocks:
-    if (
-        f'name="{PREBUILT_PROJECT}"' in block
-        or f'path="{PREBUILT_PATH}"' in block
-    ):
-        text = text.replace(block, "")
-
-###############################################################################
-# Determine remote
-###############################################################################
-
-remote = "tissot-github"
-
-if f'name="{remote}"' not in text:
-    # Try to reuse an existing GitHub remote.
-    remotes = re.findall(
-        r'<remote\b[^>]*\bname="([^"]+)"[^>]*\bfetch="[^"]*"[^>]*/>',
-        text
-    )
-
-    if remotes:
-        remote = remotes[0]
-    else:
-        remote = "github"
-
-###############################################################################
-# Add prebuilt project
-###############################################################################
-
-project = f'''    <project
-        name="{PREBUILT_PROJECT}"
-        path="{PREBUILT_PATH}"
-        remote="{remote}"
-        revision="{PREBUILT_REV}" />'''
-
-root_match = re.search(r'<manifest\b[^>]*>', text)
-
-if not root_match:
-    raise SystemExit("Manifest XML tidak memiliki <manifest> root.")
-
-insert_at = root_match.end()
-
-text = text[:insert_at] + "\n\n" + project + text[insert_at:]
-
-manifest.write_text(text)
-PY
-
-###############################################################################
-# MANIFEST VALIDATION
-###############################################################################
-
-info "Validating manifest..."
-
-if grep -q 'msm8953-mainline/linux' "${MANIFEST_FILE}"; then
-    die "Kernel source msm8953-mainline/linux masih ada di manifest."
-fi
-
-if grep -q 'path="kernel/mainline/msm8953-mainline"' "${MANIFEST_FILE}"; then
-    die "Kernel source path lama masih ada di manifest."
-fi
-
-if ! grep -q 'path="prebuilts/kernel/tissot"' "${MANIFEST_FILE}"; then
-    die "Prebuilt kernel project belum masuk manifest."
-fi
-
-if ! grep -q 'revision="Image.gz-dtb"' "${MANIFEST_FILE}"; then
-    die "Revision Image.gz-dtb tidak ditemukan di manifest."
-fi
-
-if ! grep -q 'path="kernel/mainline/configs"' "${MANIFEST_FILE}"; then
-    warn "android_kernel_mainline_configs tidak ditemukan."
-    warn "Script TIDAK akan menghapus dependency tersebut jika memang diperlukan device tree."
-else
-    ok "android_kernel_mainline_configs tetap ada."
-fi
-
-ok "Manifest kernel source lama sudah dihapus."
-ok "Manifest prebuilt kernel sudah dikonfigurasi."
-
-###############################################################################
-# SHOW MANIFEST KERNEL CONFIG
-###############################################################################
+banner
+
+# ============================================================
+# BUILD INFO
+# ============================================================
 
 echo
-echo "Relevant manifest entries:"
-grep -n -E \
-    'msm8953-mainline|prebuilts/kernel/tissot|kernel/mainline/configs|firmware-bq-bardockpro' \
-    "${MANIFEST_FILE}" \
-    || true
+echo -e "${BLUE}${BOLD}Build configuration${RESET}"
+echo "--------------------------------------------"
+echo "ROM             : $ROM_NAME"
+echo "ROM branch      : $ROM_BRANCH"
+echo "Device          : $DEVICE"
+echo "Lunch target    : $LUNCH_TARGET"
+echo "Manifest        : $MANIFEST_URL"
+echo "Manifest branch : $MANIFEST_BRANCH"
+echo "Kernel project  : $PREBUILT_KERNEL_PROJECT"
+echo "Kernel branch   : $PREBUILT_KERNEL_BRANCH"
+echo "Kernel file     : $PREBUILT_KERNEL"
+echo "Output          : $OUT_DIR"
+echo
 
-###############################################################################
-# CRAVE RESYNC
-###############################################################################
+# ============================================================
+# CLEAN LOCAL MANIFEST
+# ============================================================
 
-section "CRAVE RESYNC"
+echo
+echo "============================================="
+echo "    cleaning up previous local manifests"
+echo "============================================="
 
-info "Meminta Crave melakukan sync setelah manifest berubah."
+rm -rf .repo/local_manifests
 
-crave run \
-    --repo-sync
+echo -e "${GREEN}Local manifests cleaned.${RESET}"
 
-ok "Crave repo sync selesai."
+# ============================================================
+# REPO INIT
+# ============================================================
 
-###############################################################################
+echo
+echo "====================="
+echo "      repo init"
+echo "====================="
+
+repo init \
+    -u https://github.com/LineageOS/android.git \
+    -b "$ROM_BRANCH" \
+    --depth=1 \
+    --git-lfs
+
+echo -e "${GREEN}repo init completed.${RESET}"
+
+# ============================================================
+# LOCAL MANIFEST
+# ============================================================
+
+echo
+echo "========================"
+echo "   cloning manifest"
+echo "========================"
+
+git clone \
+    -b "$MANIFEST_BRANCH" \
+    --depth=1 \
+    "$MANIFEST_URL" \
+    .repo/local_manifests
+
+echo -e "${GREEN}Local manifest cloned.${RESET}"
+
+# ============================================================
+# VERIFY MANIFEST
+# ============================================================
+
+echo
+echo "============================================="
+echo "           verifying manifest"
+echo "============================================="
+
+MANIFEST_FILE=".repo/local_manifests/tissot.xml"
+
+if [ ! -f "$MANIFEST_FILE" ]; then
+    echo -e "${RED}[ERROR]${RESET} Manifest tidak ditemukan:"
+    echo "$MANIFEST_FILE"
+    exit 1
+fi
+
+echo -e "${GREEN}[OK]${RESET} Manifest ditemukan"
+
+# ------------------------------------------------------------
+# Cek prebuilt kernel project
+# ------------------------------------------------------------
+
+if grep -q "prebuilts/kernel/tissot" "$MANIFEST_FILE"; then
+    echo -e "${GREEN}[OK]${RESET} Prebuilt kernel project terdeteksi"
+else
+    echo -e "${RED}[ERROR]${RESET} Prebuilt kernel project tidak ditemukan"
+    echo "Expected path:"
+    echo "  prebuilts/kernel/tissot"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Cek branch Image.gz-dtb
+# ------------------------------------------------------------
+
+if grep -q 'revision="Image.gz-dtb"' "$MANIFEST_FILE"; then
+    echo -e "${GREEN}[OK]${RESET} Kernel revision: Image.gz-dtb"
+else
+    echo -e "${RED}[ERROR]${RESET} Revision Image.gz-dtb tidak ditemukan"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Pastikan kernel source lama tidak digunakan
+# ------------------------------------------------------------
+
+if grep -q "kernel/mainline/msm8953-mainline" "$MANIFEST_FILE"; then
+    echo -e "${RED}[ERROR]${RESET} Kernel source lama masih ada di manifest!"
+    echo
+    grep -n "kernel/mainline/msm8953-mainline" "$MANIFEST_FILE"
+    exit 1
+else
+    echo -e "${GREEN}[OK]${RESET} Kernel source project tidak digunakan"
+fi
+
+# ============================================================
+# CRAVE SYNC
+# ============================================================
+
+echo
+echo "==================="
+echo "     repo sync"
+echo "==================="
+
+/opt/crave/resync.sh
+
+echo -e "${GREEN}Repository sync completed.${RESET}"
+
+# ============================================================
 # VERIFY PREBUILT KERNEL
-###############################################################################
+# ============================================================
 
-section "VERIFY PREBUILT KERNEL"
+echo
+echo "============================================="
+echo "        verifying prebuilt kernel"
+echo "============================================="
 
-if [[ ! -f "${PREBUILT_KERNEL}" ]]; then
-
-    warn "Kernel belum berada di lokasi:"
-    echo "  ${PREBUILT_KERNEL}"
-
-    info "Mencari Image.gz-dtb..."
-
-    mapfile -t KERNEL_CANDIDATES < <(
-        find . \
-            -type f \
-            -name "Image.gz-dtb" \
-            -not -path "./.repo/*" \
-            2>/dev/null
-    )
-
-    if [[ "${#KERNEL_CANDIDATES[@]}" -eq 0 ]]; then
-        die "Image.gz-dtb tidak ditemukan setelah sync."
-    fi
-
-    if [[ "${#KERNEL_CANDIDATES[@]}" -gt 1 ]]; then
-        warn "Ditemukan beberapa Image.gz-dtb:"
-        printf '  %s\n' "${KERNEL_CANDIDATES[@]}"
-
-        # Prefer the expected manifest location.
-        FOUND=""
-
-        for candidate in "${KERNEL_CANDIDATES[@]}"; do
-            if [[ "${candidate}" == "./${PREBUILT_KERNEL}" ]]; then
-                FOUND="${candidate}"
-                break
-            fi
-        done
-
-        if [[ -z "${FOUND}" ]]; then
-            die "Lebih dari satu Image.gz-dtb ditemukan dan tidak ada yang berada di lokasi manifest."
-        fi
-
-        KERNEL_SOURCE_FILE="${FOUND}"
-    else
-        KERNEL_SOURCE_FILE="${KERNEL_CANDIDATES[0]}"
-    fi
-
-    mkdir -p "${PREBUILT_KERNEL_DIR}"
-
-    if [[ "${KERNEL_SOURCE_FILE}" != "./${PREBUILT_KERNEL}" ]]; then
-        cp -f "${KERNEL_SOURCE_FILE}" "${PREBUILT_KERNEL}"
-        ok "Image.gz-dtb disalin ke ${PREBUILT_KERNEL}"
-    fi
+if [ ! -d "$PREBUILT_KERNEL_DIR" ]; then
+    echo -e "${RED}[ERROR]${RESET} Prebuilt kernel directory tidak ditemukan:"
+    echo "$PREBUILT_KERNEL_DIR"
+    exit 1
 fi
 
-[[ -f "${PREBUILT_KERNEL}" ]] \
-    || die "Prebuilt kernel final tidak ditemukan."
+echo -e "${GREEN}[OK]${RESET} Kernel directory ditemukan"
+echo "$PREBUILT_KERNEL_DIR"
 
-KERNEL_SIZE="$(stat -c '%s' "${PREBUILT_KERNEL}")"
-KERNEL_SHA256="$(sha256sum "${PREBUILT_KERNEL}" | awk '{print $1}')"
-
-if (( KERNEL_SIZE < 1024 * 1024 )); then
-    die "Image.gz-dtb terlalu kecil: ${KERNEL_SIZE} bytes"
+if [ ! -f "$PREBUILT_KERNEL" ]; then
+    echo -e "${RED}[ERROR]${RESET} Image.gz-dtb tidak ditemukan:"
+    echo "$PREBUILT_KERNEL"
+    exit 1
 fi
 
-ok "Prebuilt kernel ditemukan."
-echo "  Path : ${PREBUILT_KERNEL}"
-echo "  Size : ${KERNEL_SIZE} bytes"
-echo "  SHA  : ${KERNEL_SHA256}"
+echo -e "${GREEN}[OK]${RESET} Image.gz-dtb ditemukan"
 
-###############################################################################
-# FILE TYPE
-###############################################################################
+echo
+echo "Kernel information:"
+echo "--------------------------------------------"
+
+ls -lh "$PREBUILT_KERNEL"
 
 if command -v file >/dev/null 2>&1; then
-    file "${PREBUILT_KERNEL}" || true
+    file "$PREBUILT_KERNEL"
 fi
 
-###############################################################################
-# BACKUP BOARD CONFIG
-###############################################################################
+if command -v sha256sum >/dev/null 2>&1; then
+    echo
+    echo "SHA256:"
+    sha256sum "$PREBUILT_KERNEL"
+fi
 
-section "BACKUP BOARD CONFIG"
+# ============================================================
+# BUILD ENVIRONMENT
+# ============================================================
 
-BOARD_BACKUP="${BOARD_CONFIG}.backup-${TIMESTAMP}"
+echo
+echo "=============================="
+echo "   build environment setup"
+echo "=============================="
 
-cp -f "${BOARD_CONFIG}" "${BOARD_BACKUP}"
+export BUILD_USERNAME="$BUILD_USERNAME"
+export BUILD_HOSTNAME="$BUILD_HOSTNAME"
 
-ok "Backup:"
-echo "  ${BOARD_BACKUP}"
+export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
+export ALLOW_MISSING_DEPENDENCIES=true
 
-###############################################################################
-# PATCH BOARD CONFIG
-###############################################################################
+export LC_ALL=C
 
-section "PATCH TISSOT BOARD CONFIG"
+echo "BUILD_USERNAME=$BUILD_USERNAME"
+echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
+echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
+echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
 
-python3 - "${BOARD_CONFIG}" "${PREBUILT_KERNEL}" <<'PY'
-import sys
+# ============================================================
+# PATCH LIBJXL (FIX SDK_VERSION)
+# ============================================================
+
+echo
+echo "============================================="
+echo "       patching external/libjxl"
+echo "============================================="
+
+if [ -f "external/libjxl/Android.bp" ]; then
+    sed -i 's/sdk_version: "none"/sdk_version: "current"/' external/libjxl/Android.bp
+    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp dipatch"
+else
+    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp tidak ditemukan"
+fi
+
+# ============================================================
+# PATCH: HAPUS VENDOR FIRMWARE BLOBS UNTUK MAINLINE
+# ============================================================
+
+echo
+echo "============================================="
+echo "   patching tissot_mainline/device.mk"
+echo "============================================="
+
+if [ -f "$DEVICE_MK" ]; then
+
+    # ------------------------------------------------------------
+    # 1. Backup file asli
+    # ------------------------------------------------------------
+    cp "$DEVICE_MK" "$DEVICE_MK.bak"
+    echo "Backup: $DEVICE_MK.bak"
+
+    # ------------------------------------------------------------
+    # 2. Comment SEMUA baris yang mengandung vendor/xiaomi/msm8953-common
+    #    (termasuk yang di dalam blok PRODUCT_COPY_FILES)
+    # ------------------------------------------------------------
+    sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
+
+    # ------------------------------------------------------------
+    # 3. Comment juga baris "PRODUCT_COPY_FILES += \" yang diikuti
+    #    baris comment vendor/xiaomi/msm8953-common
+    # ------------------------------------------------------------
+    sed -i '/^PRODUCT_COPY_FILES += \\$/{N;/^# .*vendor\/xiaomi\/msm8953-common/s/^/# /}' "$DEVICE_MK"
+
+    # ------------------------------------------------------------
+    # 4. Verifikasi: cek baris AKTIF (tanpa # di depan)
+    # ------------------------------------------------------------
+    ACTIVE_REFS=$(grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK" || true)
+
+    if [ -n "$ACTIVE_REFS" ]; then
+        echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
+        echo
+        echo "Baris aktif:"
+        echo "$ACTIVE_REFS"
+        echo
+        echo "Semua referensi (termasuk yang di-comment):"
+        grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
+        echo
+        echo "Restore dari backup..."
+        mv "$DEVICE_MK.bak" "$DEVICE_MK"
+        exit 1
+    else
+        echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment di $DEVICE_MK"
+        echo -e "${GREEN}[OK]${RESET} verifikasi: tidak ada vendor blobs aktif"
+    fi
+
+    # ------------------------------------------------------------
+    # 5. Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
+    # ------------------------------------------------------------
+    EMPTY_COPY=$(grep -n "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK" || true)
+
+    if [ -n "$EMPTY_COPY" ]; then
+        echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong:"
+        echo "$EMPTY_COPY"
+        echo "Ini mungkin bikin error Makefile. Cek manual:"
+        echo "  $DEVICE_MK"
+    fi
+
+else
+    echo -e "${RED}[ERROR]${RESET} $DEVICE_MK tidak ditemukan"
+    exit 1
+fi
+
+# ============================================================
+# OPTIONAL DEVICE PROP
+# ============================================================
+
+PROP_FILE="device/xiaomi/mi89xx-mainline/props/product.prop"
+
+echo
+echo "============================================="
+echo "       checking product properties"
+echo "============================================="
+
+if [ -f "$PROP_FILE" ]; then
+
+    echo "Found:"
+    echo "$PROP_FILE"
+
+else
+
+    echo -e "${YELLOW}WARNING:${RESET}"
+    echo "$PROP_FILE tidak ditemukan."
+    echo "Skipping property modification."
+
+fi
+
+# ============================================================
+# BUILD ENV
+# ============================================================
+
+echo
+echo "=============================="
+echo "   loading build environment"
+echo "=============================="
+
+source build/envsetup.sh
+
+echo -e "${GREEN}Build environment loaded.${RESET}"
+
+# ============================================================
+# LUNCH
+# ============================================================
+
+echo
+echo "===================="
+echo "       lunch"
+echo "===================="
+
+lunch "$LUNCH_TARGET"
+
+echo -e "${GREEN}Lunch completed.${RESET}"
+
+# ============================================================
+# DEVICE CHECK
+# ============================================================
+
+echo
+echo "============================================="
+echo "          checking device tree"
+echo "============================================="
+
+if [ -d "device/xiaomi/mi89xx-mainline" ]; then
+    echo -e "${GREEN}[OK]${RESET} device/xiaomi/mi89xx-mainline"
+else
+    echo -e "${RED}[ERROR]${RESET} device/xiaomi/mi89xx-mainline"
+    exit 1
+fi
+
+# ============================================================
+# PREBUILT KERNEL CHECK
+# ============================================================
+
+echo
+echo "============================================="
+echo "       checking prebuilt mainline kernel"
+echo "============================================="
+
+if [ -f "$PREBUILT_KERNEL" ]; then
+    echo -e "${GREEN}[OK]${RESET} $PREBUILT_KERNEL"
+else
+    echo -e "${RED}[ERROR]${RESET} $PREBUILT_KERNEL tidak ditemukan"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Kernel source lama TIDAK diperlukan.
+# Hanya beri informasi jika masih ada.
+# ------------------------------------------------------------
+
+if [ -d "kernel/mainline/msm8953-mainline" ]; then
+    echo -e "${YELLOW}[WARNING]${RESET} kernel source lama masih ada di workspace"
+    echo "Path:"
+    echo "  kernel/mainline/msm8953-mainline"
+    echo
+    echo "Build tetap akan menggunakan:"
+    echo "  $PREBUILT_KERNEL"
+else
+    echo -e "${GREEN}[OK]${RESET} Kernel source lama tidak ada"
+fi
+
+# ============================================================
+# PATCH ONLY TISSOT MAINLINE BOARDCONFIG
+# ============================================================
+
+echo
+echo "============================================="
+echo "       patching tissot BoardConfig"
+echo "============================================="
+
+if [ ! -f "$BOARD_CONFIG" ]; then
+    echo -e "${RED}[ERROR]${RESET} BoardConfig tidak ditemukan:"
+    echo "$BOARD_CONFIG"
+    exit 1
+fi
+
+echo "BoardConfig:"
+echo "$BOARD_CONFIG"
+
+# ------------------------------------------------------------
+# Backup BoardConfig
+# ------------------------------------------------------------
+
+if [ ! -f "$BOARD_CONFIG.bak-prebuilt" ]; then
+    cp "$BOARD_CONFIG" "$BOARD_CONFIG.bak-prebuilt"
+    echo -e "${GREEN}[OK]${RESET} Backup dibuat:"
+    echo "$BOARD_CONFIG.bak-prebuilt"
+else
+    echo -e "${YELLOW}[INFO]${RESET} Backup sudah ada:"
+    echo "$BOARD_CONFIG.bak-prebuilt"
+fi
+
+# ------------------------------------------------------------
+# Hapus konfigurasi kernel lama yang dapat memaksa build
+# kernel source atau DTB terpisah.
+#
+# HANYA BoardConfig tissot_mainline yang dipatch.
+# BoardConfig device lain TIDAK disentuh.
+# ------------------------------------------------------------
+
+python3 - "$BOARD_CONFIG" <<'PY'
 import re
-from pathlib import Path
+import sys
 
-board = Path(sys.argv[1])
-kernel = sys.argv[2]
+path = sys.argv[1]
 
-text = board.read_text()
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
 
-###############################################################################
-# Remove old kernel configuration blocks
-###############################################################################
+variables = {
+    "TARGET_KERNEL_SOURCE",
+    "TARGET_KERNEL_CONFIG",
+    "TARGET_KERNEL_CONFIG_EXT",
+    "TARGET_PREBUILT_KERNEL",
+    "TARGET_FORCE_PREBUILT_KERNEL",
+    "BOARD_KERNEL_IMAGE_NAME",
+    "BOARD_PREBUILT_DTBIMAGE_DIR",
+    "TARGET_PREBUILT_DTB",
+    "BOARD_PREBUILT_DTB",
+    "BOARD_KERNEL_DTB",
+    "TARGET_KERNEL_DTB",
+    "TARGET_KERNEL_DTBIMAGE",
+    "BOARD_KERNEL_SEPARATED_DT",
+}
 
-remove_exact = [
-    r'^\s*TARGET_KERNEL_SOURCE\s*:=.*$',
-    r'^\s*TARGET_KERNEL_CONFIG\s*:=.*$',
-    r'^\s*TARGET_KERNEL_CONFIG_EXT\s*:=.*$',
-    r'^\s*TARGET_KERNEL_ADDITIONAL_FLAGS\s*:=.*$',
-    r'^\s*KERNEL_DEFCONFIG\s*:=.*$',
-    r'^\s*TARGET_KERNEL_VERSION\s*:=.*$',
-    r'^\s*TARGET_KERNEL_PLATFORM_TARGET\s*:=.*$',
-    r'^\s*TARGET_KERNEL_CLANG_COMPILE\s*:=.*$',
-    r'^\s*TARGET_KERNEL_CLANG_VERSION\s*:=.*$',
-    r'^\s*TARGET_KERNEL_CROSS_COMPILE_PREFIX\s*:=.*$',
-    r'^\s*TARGET_KERNEL_CROSS_COMPILE_ARM32_PREFIX\s*:=.*$',
-    r'^\s*TARGET_KERNEL_TOOLCHAIN_PREFIX\s*:=.*$',
-    r'^\s*TARGET_KERNEL_LLVM_BINUTILS\s*:=.*$',
-    r'^\s*TARGET_KERNEL_NO_GCC\s*:=.*$',
-    r'^\s*TARGET_KERNEL_MIXED_MODE\s*:=.*$',
-    r'^\s*TARGET_KERNEL_PREBUILT\s*:=.*$',
-    r'^\s*TARGET_PREBUILT_KERNEL\s*:=.*$',
-    r'^\s*TARGET_FORCE_PREBUILT_KERNEL\s*:=.*$',
-    r'^\s*TARGET_PREBUILT_KERNEL_HEADERS\s*:=.*$',
-    r'^\s*TARGET_NO_KERNEL_OVERRIDE\s*:=.*$',
-]
+output = []
 
-for pattern in remove_exact:
-    text = re.sub(pattern, "", text, flags=re.MULTILINE)
+for line in lines:
+    stripped = line.lstrip()
 
-###############################################################################
-# Remove old kernel module variables
-#
-# IMPORTANT:
-# These are the variables that can make the build system attempt to find
-# system_dlkm.modules.load or .ko files inside the prebuilt kernel directory.
-###############################################################################
+    if stripped.startswith("#"):
+        output.append(line)
+        continue
 
-module_patterns = [
-    r'^\s*BOARD_SYSTEM_KERNEL_MODULES\s*:=.*$',
-    r'^\s*BOARD_SYSTEM_KERNEL_MODULES_LOAD\s*:=.*$',
-    r'^\s*BOARD_SYSTEM_KERNEL_MODULES_BLOCKLIST_FILE\s*:=.*$',
-    r'^\s*BOARD_VENDOR_KERNEL_MODULES\s*:=.*$',
-    r'^\s*BOARD_VENDOR_KERNEL_MODULES_LOAD\s*:=.*$',
-    r'^\s*BOARD_VENDOR_KERNEL_MODULES_BLOCKLIST_FILE\s*:=.*$',
-    r'^\s*BOARD_VENDOR_RAMDISK_KERNEL_MODULES\s*:=.*$',
-    r'^\s*BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD\s*:=.*$',
-    r'^\s*BOARD_VENDOR_RAMDISK_KERNEL_MODULES_BLOCKLIST_FILE\s*:=.*$',
-    r'^\s*BOARD_RECOVERY_KERNEL_MODULES\s*:=.*$',
-    r'^\s*BOARD_RECOVERY_KERNEL_MODULES_LOAD\s*:=.*$',
-    r'^\s*BOARD_RECOVERY_KERNEL_MODULES_BLOCKLIST_FILE\s*:=.*$',
-    r'^\s*BOARD_KERNEL_MODULES\s*:=.*$',
-    r'^\s*TARGET_KERNEL_MODULES\s*:=.*$',
-    r'^\s*TARGET_KERNEL_EXT_MODULES\s*:=.*$',
-    r'^\s*TARGET_MODULE_ALIASES\s*:=.*$',
-    r'^\s*BOARD_VENDOR_KERNEL_MODULES_LOAD\s*\+=.*$',
-    r'^\s*BOARD_SYSTEM_KERNEL_MODULES_LOAD\s*\+=.*$',
-    r'^\s*BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD\s*\+=.*$',
-]
+    match = re.match(
+        r'^\s*([A-Za-z0-9_]+)\s*(?::|\?|\+)?=\s*',
+        line
+    )
 
-for pattern in module_patterns:
-    text = re.sub(pattern, "", text, flags=re.MULTILINE)
+    if match and match.group(1) in variables:
+        output.append("# PREBUILT-KERNEL: disabled old setting: " + line)
+    else:
+        output.append(line)
 
-###############################################################################
-# Remove stale system_dlkm/prebuilt-kernel path variables
-###############################################################################
+with open(path, "w", encoding="utf-8") as f:
+    f.writelines(output)
 
-path_patterns = [
-    r'^\s*SYSTEM_DLKM_MODULES_PATH\s*:=.*$',
-    r'^\s*DLKM_MODULES_PATH\s*:=.*$',
-    r'^\s*RAMDISK_MODULES_PATH\s*:=.*$',
-    r'^\s*KERNEL_MODULES_PATH\s*:=.*$',
-    r'^\s*PREBUILT_KERNEL_PATH\s*:=.*$',
-]
+PY
 
-for pattern in path_patterns:
-    text = re.sub(pattern, "", text, flags=re.MULTILINE)
+# ------------------------------------------------------------
+# Tambahkan konfigurasi prebuilt kernel.
+# Image.gz-dtb sudah mengandung DTB.
+# ------------------------------------------------------------
 
-###############################################################################
-# Remove separate DTB configuration
-#
-# Image.gz-dtb already contains kernel + DTB.
-###############################################################################
+cat >> "$BOARD_CONFIG" <<'EOF'
 
-dtb_patterns = [
-    r'^\s*BOARD_PREBUILT_DTBIMAGE_DIR\s*:=.*$',
-    r'^\s*BOARD_PREBUILT_DTBIMAGE_DIR\s*\?=.*$',
-    r'^\s*TARGET_PREBUILT_DTB\s*:=.*$',
-    r'^\s*BOARD_PREBUILT_DTB\s*:=.*$',
-    r'^\s*BOARD_DTBIMAGE_PARTITION_SIZE\s*:=.*$',
-    r'^\s*BOARD_DTB_OFFSET\s*:=.*$',
-    r'^\s*BOARD_KERNEL_DTB\s*:=.*$',
-    r'^\s*TARGET_KERNEL_DTB\s*:=.*$',
-    r'^\s*TARGET_KERNEL_DTBIMAGE\s*:=.*$',
-]
-
-for pattern in dtb_patterns:
-    text = re.sub(pattern, "", text, flags=re.MULTILINE)
-
-###############################################################################
-# Remove BOARD_MKBOOTIMG_ARGS entries that explicitly reference DTB
-###############################################################################
-
-text = re.sub(
-    r'^[ \t]*BOARD_MKBOOTIMG_ARGS\s*\+=\s*--dtb(?:_offset)?\s+\S+.*$',
-    "",
-    text,
-    flags=re.MULTILINE
-)
-
-###############################################################################
-# Remove stale PRODUCT_COPY_FILES kernel entries
-###############################################################################
-
-text = re.sub(
-    r'^[ \t]*PRODUCT_COPY_FILES\s*(?:\+=|:=)\s*.*TARGET_PREBUILT_KERNEL.*$',
-    "",
-    text,
-    flags=re.MULTILINE
-)
-
-text = re.sub(
-    r'^[ \t]*PRODUCT_COPY_FILES\s*.*:kernel\s*$',
-    "",
-    text,
-    flags=re.MULTILINE
-)
-
-###############################################################################
-# Remove old kernel section comments if present
-###############################################################################
-
-text = re.sub(
-    r'\n[ \t]*#\s*Kernel\s*-\s*prebuilt[^\n]*\n',
-    "\n",
-    text,
-    flags=re.IGNORECASE
-)
-
-###############################################################################
-# Normalize duplicate empty lines
-###############################################################################
-
-text = re.sub(r'\n{3,}', '\n\n', text)
-
-###############################################################################
-# Kernel configuration
-###############################################################################
-
-kernel_block = f'''
-###############################################################################
+# ============================================================
 # PREBUILT MAINLINE KERNEL
-###############################################################################
-
-# Image.gz-dtb contains the kernel image and embedded DTB.
-# No separate dtb.img is required.
+# ============================================================
+#
+# Image.gz-dtb already contains the DTB.
+# Do NOT configure a separate dtb.img.
+#
 
 TARGET_KERNEL_ARCH := arm64
 TARGET_KERNEL_HEADER_ARCH := arm64
 
 BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
 
-TARGET_FORCE_PREBUILT_KERNEL := true
-TARGET_PREBUILT_KERNEL := {kernel}
+TARGET_PREBUILT_KERNEL := prebuilts/kernel/tissot/Image.gz-dtb
 
-# The kernel source is intentionally unset.
-# This forces LineageOS kernel.mk to use TARGET_PREBUILT_KERNEL.
-TARGET_KERNEL_SOURCE :=
-TARGET_KERNEL_CONFIG :=
-TARGET_KERNEL_CONFIG_EXT :=
+EOF
 
-# Do not use source/platform kernel build mode.
-TARGET_KERNEL_PLATFORM_TARGET :=
-TARGET_KERNEL_MIXED_MODE := false
+echo -e "${GREEN}[OK]${RESET} Prebuilt kernel configuration ditambahkan"
 
-# Do not search the prebuilt kernel directory for kernel modules.
-BOARD_SYSTEM_KERNEL_MODULES :=
-BOARD_SYSTEM_KERNEL_MODULES_LOAD :=
-BOARD_VENDOR_KERNEL_MODULES :=
-BOARD_VENDOR_KERNEL_MODULES_LOAD :=
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES :=
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD :=
-'''
+# ============================================================
+# BOARDCONFIG VERIFICATION
+# ============================================================
 
-text = text.rstrip() + "\n" + kernel_block + "\n"
+echo
+echo "============================================="
+echo "       verifying tissot BoardConfig"
+echo "============================================="
 
-board.write_text(text)
-PY
+echo
+echo "Relevant kernel configuration:"
+echo "--------------------------------------------"
 
-ok "BoardConfig tissot_mainline berhasil dipatch."
+grep -nE \
+    'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|TARGET_KERNEL_CONFIG|DTB' \
+    "$BOARD_CONFIG" \
+    || true
 
-###############################################################################
-# REMOVE ACCIDENTAL PREBUILT CONFIG FROM OTHER BOARD FILES
-#
-# We do NOT modify them.
-# We only check and report if the previous script contaminated them.
-###############################################################################
+# ------------------------------------------------------------
+# Pastikan TARGET_PREBUILT_KERNEL aktif.
+# ------------------------------------------------------------
 
-section "CHECK OTHER BOARD CONFIGS"
+ACTIVE_PREBUILT=$(grep -n \
+    '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*[:?+]*=' \
+    "$BOARD_CONFIG" \
+    | tail -n 1 \
+    || true)
 
-OTHER_KERNEL_CONFIGS="$(
-    find "${DEVICE_DIR}" \
-        -type f \
-        \( -name 'BoardConfig.mk' -o -name 'BoardConfigCommon.mk' \) \
-        -not -path "${DEVICE_DIR}/tissot_mainline/*" \
-        -print
-)"
-
-if [[ -n "${OTHER_KERNEL_CONFIGS}" ]]; then
-    FOUND_BAD=0
-
-    while IFS= read -r cfg; do
-        [[ -z "${cfg}" ]] && continue
-
-        if grep -q \
-            -E \
-            'TARGET_PREBUILT_KERNEL.*prebuilts/kernel/tissot|TARGET_FORCE_PREBUILT_KERNEL.*true' \
-            "${cfg}"; then
-
-            warn "BoardConfig lain pernah terkontaminasi:"
-            echo "  ${cfg}"
-
-            FOUND_BAD=1
-        fi
-    done <<< "${OTHER_KERNEL_CONFIGS}"
-
-    if (( FOUND_BAD )); then
-        warn "Script ini TIDAK mengedit BoardConfig device lain."
-        warn "Jika backup dari run sebelumnya tersedia, restore BoardConfig tersebut secara manual."
-    else
-        ok "Tidak ada BoardConfig device lain yang menunjukkan konfigurasi prebuilt tissot."
-    fi
+if [ -z "$ACTIVE_PREBUILT" ]; then
+    echo -e "${RED}[ERROR]${RESET} TARGET_PREBUILT_KERNEL tidak aktif"
+    exit 1
 fi
 
-###############################################################################
-# REMOVE STALE KERNEL SOURCE DIRECTORY IF IT EXISTS
-###############################################################################
+echo
+echo -e "${GREEN}[OK]${RESET} TARGET_PREBUILT_KERNEL aktif:"
+echo "$ACTIVE_PREBUILT"
 
-section "CHECK OLD KERNEL SOURCE"
+# ------------------------------------------------------------
+# Pastikan target menunjuk ke Image.gz-dtb.
+# ------------------------------------------------------------
 
-if [[ -d "${KERNEL_SOURCE_PATH}" ]]; then
-    warn "Kernel source lama masih ada:"
-    echo "  ${KERNEL_SOURCE_PATH}"
+if grep -q \
+    '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*[:?+]*=[[:space:]]*prebuilts/kernel/tissot/Image.gz-dtb' \
+    "$BOARD_CONFIG"; then
 
-    warn "Manifest sudah tidak mereferensikan source tersebut."
+    echo -e "${GREEN}[OK]${RESET} TARGET_PREBUILT_KERNEL benar"
 
-    # IMPORTANT:
-    # Do not rm -rf it.
-    # Leave it alone because Crave workspace/source management owns it.
 else
-    ok "Kernel source lama tidak ada."
+
+    echo -e "${RED}[ERROR]${RESET} TARGET_PREBUILT_KERNEL salah"
+    exit 1
+
 fi
 
-###############################################################################
-# VERIFY BOARD CONFIG
-###############################################################################
-
-section "VERIFY BOARD CONFIG"
+# ============================================================
+# POST-LUNCH KERNEL VERIFICATION
+# ============================================================
 
 echo
-echo "=== Kernel configuration ==="
+echo "============================================="
+echo "       post-lunch kernel verification"
+echo "============================================="
 
-grep -n -E \
-    'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_FORCE_PREBUILT_KERNEL|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|TARGET_KERNEL_CONFIG|TARGET_KERNEL_PLATFORM_TARGET|TARGET_KERNEL_MIXED_MODE' \
-    "${BOARD_CONFIG}" \
-    || true
+if [ -n "${TARGET_PREBUILT_KERNEL:-}" ]; then
+
+    echo "TARGET_PREBUILT_KERNEL=$TARGET_PREBUILT_KERNEL"
+
+    case "$TARGET_PREBUILT_KERNEL" in
+        "$ANDROID_BUILD_TOP/prebuilts/kernel/tissot/Image.gz-dtb")
+            echo -e "${GREEN}[OK]${RESET} TARGET_PREBUILT_KERNEL sesuai"
+            ;;
+        *)
+            echo -e "${YELLOW}[WARNING]${RESET} TARGET_PREBUILT_KERNEL:"
+            echo "$TARGET_PREBUILT_KERNEL"
+            ;;
+    esac
+
+else
+
+    echo -e "${YELLOW}[INFO]${RESET} TARGET_PREBUILT_KERNEL belum tersedia di environment"
+    echo "BoardConfig tetap menunjuk ke:"
+    echo "  prebuilts/kernel/tissot/Image.gz-dtb"
+
+fi
+
+# ============================================================
+# LIBJXL DEBUG
+# ============================================================
 
 echo
-echo "=== DTB configuration ==="
+echo "============================================="
+echo "       checking external/libjxl"
+echo "============================================="
 
-grep -n -E \
-    'BOARD_PREBUILT_DTBIMAGE_DIR|TARGET_PREBUILT_DTB|BOARD_PREBUILT_DTB|BOARD_DTB_OFFSET|TARGET_KERNEL_DTB|TARGET_KERNEL_DTBIMAGE' \
-    "${BOARD_CONFIG}" \
-    || true
+if [ -f "external/libjxl/Android.bp" ]; then
 
-echo
-echo "=== Kernel module configuration ==="
+    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp"
 
-grep -n -E \
-    'BOARD_SYSTEM_KERNEL_MODULES|BOARD_VENDOR_KERNEL_MODULES|BOARD_VENDOR_RAMDISK_KERNEL_MODULES|SYSTEM_DLKM_MODULES_PATH|DLKM_MODULES_PATH|RAMDISK_MODULES_PATH' \
-    "${BOARD_CONFIG}" \
-    || true
-
-###############################################################################
-# HARD VALIDATION
-###############################################################################
-
-section "HARD VALIDATION"
-
-FAIL=0
-
-if ! grep -q '^TARGET_FORCE_PREBUILT_KERNEL := true$' "${BOARD_CONFIG}"; then
-    error "TARGET_FORCE_PREBUILT_KERNEL tidak aktif."
-    FAIL=1
-fi
-
-if ! grep -q "^TARGET_PREBUILT_KERNEL := ${PREBUILT_KERNEL}$" "${BOARD_CONFIG}"; then
-    error "TARGET_PREBUILT_KERNEL tidak menunjuk ke ${PREBUILT_KERNEL}"
-    FAIL=1
-fi
-
-if ! grep -q '^BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb$' "${BOARD_CONFIG}"; then
-    error "BOARD_KERNEL_IMAGE_NAME bukan Image.gz-dtb."
-    FAIL=1
-fi
-
-if grep -qE '^TARGET_KERNEL_SOURCE\s*:=[[:space:]]*[^[:space:]]' "${BOARD_CONFIG}"; then
-    error "TARGET_KERNEL_SOURCE masih menunjuk ke source."
-    FAIL=1
-fi
-
-if grep -qE '^TARGET_KERNEL_CONFIG\s*:=[[:space:]]*[^[:space:]]' "${BOARD_CONFIG}"; then
-    error "TARGET_KERNEL_CONFIG masih aktif."
-    FAIL=1
-fi
-
-if grep -qE \
-    '^[[:space:]]*(BOARD_PREBUILT_DTBIMAGE_DIR|TARGET_PREBUILT_DTB|BOARD_PREBUILT_DTB|BOARD_DTB_OFFSET|TARGET_KERNEL_DTB|TARGET_KERNEL_DTBIMAGE)[[:space:]]*:?=' \
-    "${BOARD_CONFIG}"; then
-
-    error "Konfigurasi separate DTB masih ditemukan."
-    FAIL=1
-fi
-
-if grep -qE \
-    '^[[:space:]]*(BOARD_SYSTEM_KERNEL_MODULES|BOARD_SYSTEM_KERNEL_MODULES_LOAD|BOARD_VENDOR_KERNEL_MODULES|BOARD_VENDOR_KERNEL_MODULES_LOAD|BOARD_VENDOR_RAMDISK_KERNEL_MODULES|BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD)[[:space:]]*:?=' \
-    "${BOARD_CONFIG}"; then
-
-    # Empty assignment is allowed.
-    NONEMPTY_MODULE_LINES="$(
-        grep -E \
-            '^[[:space:]]*(BOARD_SYSTEM_KERNEL_MODULES|BOARD_SYSTEM_KERNEL_MODULES_LOAD|BOARD_VENDOR_KERNEL_MODULES|BOARD_VENDOR_KERNEL_MODULES_LOAD|BOARD_VENDOR_RAMDISK_KERNEL_MODULES|BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD)[[:space:]]*:=[[:space:]]*[^[:space:]]' \
-            "${BOARD_CONFIG}" \
-            || true
-    )"
-
-    if [[ -n "${NONEMPTY_MODULE_LINES}" ]]; then
-        error "Kernel module path masih aktif:"
-        echo "${NONEMPTY_MODULE_LINES}"
-        FAIL=1
-    fi
-fi
-
-if (( FAIL )); then
-    die "Validasi BoardConfig gagal."
-fi
-
-ok "BoardConfig valid untuk prebuilt Image.gz-dtb."
-
-###############################################################################
-# SEARCH DANGEROUS STALE REFERENCES
-###############################################################################
-
-section "SEARCH STALE PREBUILT REFERENCES"
-
-STALE_HITS="$(
-    grep -RIn \
-        --exclude-dir=.git \
-        --exclude-dir=.repo \
-        --exclude='*.backup-*' \
-        -E \
-        'prebuilts/kernel/tissot/.*/(system_dlkm|vendor_dlkm|modules)|prebuilts/kernel/tissot/(dtb|dtbo)|TARGET_PREBUILT_DTB|BOARD_PREBUILT_DTBIMAGE_DIR' \
-        device/xiaomi/mi89xx-mainline \
-        2>/dev/null \
+    echo
+    echo "Relevant properties:"
+    grep -nE \
+        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
+        external/libjxl/Android.bp \
         || true
-)"
 
-if [[ -n "${STALE_HITS}" ]]; then
-    warn "Ditemukan referensi stale:"
-    echo "${STALE_HITS}"
-    warn "Referensi tersebut tidak otomatis diubah kecuali berasal dari BoardConfig tissot."
 else
-    ok "Tidak ada referensi stale yang terdeteksi."
+
+    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp missing"
+
 fi
 
-###############################################################################
-# SEARCH SYSTEM DLKM REFERENCES
-###############################################################################
+# ============================================================
+# HIGHWAY DEBUG
+# ============================================================
 
-section "CHECK SYSTEM DLKM"
+echo
+echo "============================================="
+echo "       checking external/highway"
+echo "============================================="
 
-DLKM_HITS="$(
-    grep -RIn \
-        --exclude-dir=.git \
-        --exclude-dir=.repo \
-        --exclude='*.backup-*' \
-        -E \
-        'system_dlkm\.modules\.load|BOARD_SYSTEM_KERNEL_MODULES|SYSTEM_KERNEL_MODULES' \
-        "${DEVICE_DIR}" \
-        2>/dev/null \
+if [ -f "external/highway/Android.bp" ]; then
+
+    echo -e "${GREEN}[OK]${RESET} external/highway/Android.bp"
+
+    echo
+    echo "Relevant properties:"
+    grep -nE \
+        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
+        external/highway/Android.bp \
         || true
-)"
 
-if [[ -n "${DLKM_HITS}" ]]; then
-    echo "${DLKM_HITS}"
 else
-    ok "Tidak ada system_dlkm kernel module reference di device tree."
+
+    echo -e "${YELLOW}[WARNING]${RESET} external/highway/Android.bp missing"
+
 fi
 
-###############################################################################
-# CHECK MANIFEST AGAIN
-###############################################################################
-
-section "FINAL MANIFEST CHECK"
-
-if grep -q 'msm8953-mainline/linux' "${MANIFEST_FILE}"; then
-    die "Manifest masih memiliki msm8953-mainline/linux."
-fi
-
-if grep -q 'kernel/mainline/msm8953-mainline' "${MANIFEST_FILE}"; then
-    die "Manifest masih memiliki kernel/mainline/msm8953-mainline."
-fi
-
-if ! grep -q 'prebuilts/kernel/tissot' "${MANIFEST_FILE}"; then
-    die "Manifest tidak memiliki prebuilts/kernel/tissot."
-fi
-
-if ! grep -q 'revision="Image.gz-dtb"' "${MANIFEST_FILE}"; then
-    die "Manifest tidak menggunakan revision Image.gz-dtb."
-fi
-
-ok "Manifest final valid."
-
-###############################################################################
-# VERIFY KERNEL AGAIN
-###############################################################################
-
-section "FINAL KERNEL CHECK"
-
-[[ -f "${PREBUILT_KERNEL}" ]] \
-    || die "Final Image.gz-dtb tidak ditemukan."
-
-KERNEL_SIZE="$(stat -c '%s' "${PREBUILT_KERNEL}")"
-KERNEL_SHA256="$(sha256sum "${PREBUILT_KERNEL}" | awk '{print $1}')"
-
-echo "Kernel:"
-echo "  ${PREBUILT_KERNEL}"
-echo
-echo "Size:"
-echo "  ${KERNEL_SIZE} bytes"
-echo
-echo "SHA256:"
-echo "  ${KERNEL_SHA256}"
-
-###############################################################################
-# ENVIRONMENT
-###############################################################################
-
-section "SET BUILD ENVIRONMENT"
-
-export ALLOW_MISSING_DEPENDENCIES=true
-export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
-
-# Make prebuilt kernel path visible to the shell/build environment.
-export TARGET_PREBUILT_KERNEL="${PREBUILT_KERNEL}"
-
-export BUILD_USERNAME="Arden-Vey"
-export BUILD_HOSTNAME="crave"
-
-export DEVICE="${DEVICE_NAME}"
-export BUILD_TARGET="all_images"
-
-ok "Build environment configured."
-
-###############################################################################
-# SOURCE ENVIRONMENT
-###############################################################################
-
-section "LOAD ANDROID BUILD ENVIRONMENT"
-
-if [[ ! -f "build/envsetup.sh" ]]; then
-    die "build/envsetup.sh tidak ditemukan."
-fi
-
-source build/envsetup.sh
-
-ok "envsetup loaded."
-
-###############################################################################
-# LUNCH
-###############################################################################
-
-section "LUNCH"
-
-lunch "${LUNCH_TARGET}"
-
-ok "Lunch berhasil:"
-echo "  ${LUNCH_TARGET}"
-
-###############################################################################
-# VERIFY TARGET VARIABLES
-###############################################################################
-
-section "VERIFY BUILD VARIABLES"
+# ============================================================
+# VENDOR COMMON VERIFICATION
+# ============================================================
 
 echo
-echo "TARGET_DEVICE:"
-echo "${TARGET_DEVICE:-<unset>}"
+echo "===================================="
+echo "    Checking vendor/vendor-common   "
+echo "===================================="
 
-echo
-echo "TARGET_PRODUCT:"
-echo "${TARGET_PRODUCT:-<unset>}"
-
-echo
-echo "TARGET_BUILD_VARIANT:"
-echo "${TARGET_BUILD_VARIANT:-<unset>}"
-
-echo
-echo "TARGET_PREBUILT_KERNEL:"
-echo "${TARGET_PREBUILT_KERNEL:-<unset>}"
-
-echo
-echo "TARGET_KERNEL_SOURCE:"
-echo "${TARGET_KERNEL_SOURCE:-<unset>}"
-
-echo
-echo "BOARD_KERNEL_IMAGE_NAME:"
-echo "${BOARD_KERNEL_IMAGE_NAME:-<unset>}"
-
-###############################################################################
-# VARIABLE VALIDATION
-###############################################################################
-
-if [[ "${TARGET_DEVICE:-}" != "${DEVICE_NAME}" ]]; then
-    warn "TARGET_DEVICE = ${TARGET_DEVICE:-unset}"
-    warn "Expected      = ${DEVICE_NAME}"
+# Cek baris AKTIF (tanpa # di depan)
+if grep -q "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"; then
+    echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
+    echo
+    echo "Baris aktif:"
+    grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"
+    echo
+    echo "Semua referensi (termasuk yang di-comment):"
+    grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
+    exit 1
 fi
 
-if [[ "${TARGET_PREBUILT_KERNEL:-}" != "${PREBUILT_KERNEL}" ]]; then
-    die "Build environment TARGET_PREBUILT_KERNEL salah."
+# Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
+if grep -q "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK"; then
+    echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong"
 fi
 
-if [[ -n "${TARGET_KERNEL_SOURCE:-}" ]]; then
-    warn "TARGET_KERNEL_SOURCE masih memiliki nilai:"
-    echo "  ${TARGET_KERNEL_SOURCE}"
-    warn "Build system mungkin mendeteksi kernel source."
-fi
+echo -e "${GREEN}[OK]${RESET} patch berhasil"
 
-if [[ "${BOARD_KERNEL_IMAGE_NAME:-}" != "Image.gz-dtb" ]]; then
-    die "BOARD_KERNEL_IMAGE_NAME bukan Image.gz-dtb."
-fi
+# ============================================================
+# PRE-BUILD SUMMARY
+# ============================================================
 
-###############################################################################
-# PREBUILD EXISTENCE CHECK AFTER LUNCH
-###############################################################################
-
-[[ -f "${TARGET_PREBUILT_KERNEL}" ]] \
-    || die "TARGET_PREBUILT_KERNEL tidak ada setelah lunch."
-
-ok "Build system melihat prebuilt kernel."
-
-###############################################################################
-# CHECK OUT DIR
-###############################################################################
-
-section "CHECK OUTPUT DIRECTORY"
-
-mkdir -p "${PRODUCT_OUT}"
-
-ok "Product output:"
-echo "  ${PRODUCT_OUT}"
-
-###############################################################################
-# BUILD
-###############################################################################
-
-section "BUILD LINEAGEOS 23.2"
-
-info "Mulai build..."
-info "Kernel TIDAK dikompilasi."
-info "Kernel yang dipakai:"
-echo "  ${PREBUILT_KERNEL}"
 echo
-info "Build command:"
-echo "  mka bacon"
+echo "============================================================"
+echo "                    PRE-BUILD SUMMARY"
+echo "============================================================"
 
-###############################################################################
-# Build
-###############################################################################
+echo
+echo "ROM             : $ROM_NAME"
+echo "Branch          : $ROM_BRANCH"
+echo "Device          : $DEVICE"
+echo "Lunch           : $LUNCH_TARGET"
+echo "Build username  : $BUILD_USERNAME"
+echo "Build hostname  : $BUILD_HOSTNAME"
+echo "CPU threads     : $(nproc --all)"
+echo "Kernel mode     : PREBUILT"
+echo "Kernel project  : $PREBUILT_KERNEL_PROJECT"
+echo "Kernel branch   : $PREBUILT_KERNEL_BRANCH"
+echo "Kernel          : $PREBUILT_KERNEL"
+echo "DTB             : EMBEDDED"
+echo "Output          : $OUT_DIR"
 
+echo
+echo "============================================================"
+echo "                    STARTING BUILD"
+echo "============================================================"
+
+echo
+echo "Command:"
+echo
+echo "    mka bacon"
+echo
+
+BUILD_START=$(date +%s)
+
+# ============================================================
+# BUILD (TANPA set -e AGAR SCRIPT TIDAK BERHENTI DI ERROR)
+# ============================================================
+
+set +e
 mka bacon
+BUILD_STATUS=$?
+set -e
 
-###############################################################################
+# ============================================================
+# BUILD TIME
+# ============================================================
+
+BUILD_END=$(date +%s)
+BUILD_TIME=$((BUILD_END - BUILD_START))
+
+# ============================================================
+# CEK STATUS BUILD
+# ============================================================
+
+if [ $BUILD_STATUS -ne 0 ]; then
+
+    echo
+    echo "============================================================"
+    echo "                    BUILD FAILED"
+    echo "============================================================"
+
+    echo
+    echo -e "${RED}${BOLD}Build failed with exit status: $BUILD_STATUS${RESET}"
+
+    echo
+    echo "Build time:"
+    echo "$BUILD_TIME seconds"
+
+    echo
+    echo "Cek log di:"
+    echo "  out/error.log"
+    echo "  out/verbose.log.gz"
+
+    exit $BUILD_STATUS
+
+fi
+
+# ============================================================
 # BUILD SUCCESS
-###############################################################################
-
-section "BUILD FINISHED"
-
-ok "Build selesai."
-
-###############################################################################
-# ARTIFACT SEARCH
-###############################################################################
-
-section "SEARCH BUILD ARTIFACTS"
+# ============================================================
 
 echo
-echo "ZIP:"
-find "${PRODUCT_OUT}" \
-    -maxdepth 1 \
-    -type f \
-    \( -name '*.zip' -o -name '*.img' \) \
-    -printf '%f\n' \
-    2>/dev/null \
-    | sort \
-    || true
+echo "============================================================"
+echo "                    BUILD SUCCESS"
+echo "============================================================"
 
 echo
-echo "Boot images:"
-find "${PRODUCT_OUT}" \
+echo -e "${GREEN}${BOLD}Build completed successfully.${RESET}"
+
+echo
+echo "Build time:"
+echo "$BUILD_TIME seconds"
+
+# ============================================================
+# ARTIFACT CHECK
+# ============================================================
+
+echo
+echo "============================================================"
+echo "                  BUILD ARTIFACTS"
+echo "============================================================"
+
+if [ ! -d "$OUT_DIR" ]; then
+
+    echo -e "${RED}ERROR:${RESET}"
+    echo "Output directory tidak ditemukan:"
+    echo "$OUT_DIR"
+    exit 1
+
+fi
+
+echo
+echo "Output directory:"
+echo "$OUT_DIR"
+
+echo
+echo "Files:"
+echo "--------------------------------------------"
+
+find "$OUT_DIR" \
     -maxdepth 1 \
     -type f \
     \( \
-        -name 'boot.img' \
-        -o -name 'vendor_boot.img' \
-        -o -name 'init_boot.img' \
-        -o -name 'recovery.img' \
-        -o -name 'dtbo.img' \
-        -o -name 'vbmeta.img' \
+        -name "*.zip" \
+        -o -name "*.img" \
+        -o -name "*.sha256sum" \
+        -o -name "*.json" \
     \) \
     -printf '%f\n' \
-    2>/dev/null \
-    | sort \
-    || true
+    | sort
 
-###############################################################################
-# VERIFY IMPORTANT ARTIFACTS
-###############################################################################
+# ============================================================
+# ROM ZIP
+# ============================================================
 
-section "VERIFY ARTIFACTS"
+echo
+echo "============================================================"
+echo "                    ROM ZIP CHECK"
+echo "============================================================"
 
-BOOT_IMG="${PRODUCT_OUT}/boot.img"
+ZIP=$(find "$OUT_DIR" \
+    -maxdepth 1 \
+    -type f \
+    -name "*.zip" \
+    ! -name "*ota*.zip" \
+    | head -n 1)
 
-if [[ -f "${BOOT_IMG}" ]]; then
-    BOOT_SIZE="$(stat -c '%s' "${BOOT_IMG}")"
-    BOOT_SHA="$(sha256sum "${BOOT_IMG}" | awk '{print $1}')"
+if [ -n "$ZIP" ]; then
 
-    ok "boot.img ditemukan."
-    echo "  Size: ${BOOT_SIZE}"
-    echo "  SHA : ${BOOT_SHA}"
+    echo -e "${GREEN}ROM ZIP found:${RESET}"
+    echo
+    echo "$ZIP"
+
 else
-    warn "boot.img tidak ditemukan di output."
+
+    echo -e "${RED}No ROM ZIP found in artifacts!${RESET}"
+    exit 1
+
 fi
 
-###############################################################################
-# FIND ROM ZIP
-###############################################################################
+# ============================================================
+# IMAGE CHECK
+# ============================================================
 
-ROM_ZIP="$(
-    find "${PRODUCT_OUT}" \
-        -maxdepth 1 \
-        -type f \
-        -name '*.zip' \
-        -printf '%T@ %p\n' \
-        2>/dev/null \
-        | sort -nr \
-        | awk 'NR==1 {$1=""; sub(/^ /,""); print}'
-)"
+echo
+echo "============================================================"
+echo "                    IMAGE CHECK"
+echo "============================================================"
 
-if [[ -n "${ROM_ZIP}" && -f "${ROM_ZIP}" ]]; then
-    ROM_SIZE="$(stat -c '%s' "${ROM_ZIP}")"
-    ROM_SHA="$(sha256sum "${ROM_ZIP}" | awk '{print $1}')"
+for IMAGE in \
+    boot.img \
+    vendor.img \
+    system.img \
+    init_boot.img \
+    recovery.img
+do
 
-    ok "ROM ZIP ditemukan:"
-    echo "  ${ROM_ZIP}"
-    echo
-    echo "Size:"
-    echo "  ${ROM_SIZE} bytes"
-    echo
-    echo "SHA256:"
-    echo "  ${ROM_SHA}"
-else
-    warn "ROM ZIP tidak ditemukan."
+    if [ -f "$OUT_DIR/$IMAGE" ]; then
+        echo -e "${GREEN}[OK]${RESET} $IMAGE"
+    else
+        echo -e "${YELLOW}[--]${RESET} $IMAGE"
+    fi
+
+done
+
+# ============================================================
+# SHA256
+# ============================================================
+
+echo
+echo "============================================================"
+echo "                    SHA256"
+echo "============================================================"
+
+if command -v sha256sum >/dev/null 2>&1; then
+
+    sha256sum "$ZIP"
+
 fi
 
-###############################################################################
-# FINAL SUMMARY
-###############################################################################
-
-section "FINAL SUMMARY"
+# ============================================================
+# FINAL
+# ============================================================
 
 echo
-echo "ROM"
-echo "----------------------------------------"
-echo "Branch       : ${ROM_BRANCH}"
-echo "Device       : ${DEVICE_NAME}"
-echo "Lunch        : ${LUNCH_TARGET}"
-echo
+echo "============================================================"
+echo "                  BUILD COMPLETE"
+echo "============================================================"
 
-echo "Kernel"
-echo "----------------------------------------"
-echo "Type         : PREBUILT"
-echo "Image        : Image.gz-dtb"
-echo "Path         : ${PREBUILT_KERNEL}"
-echo "Size         : ${KERNEL_SIZE}"
-echo "SHA256       : ${KERNEL_SHA256}"
 echo
+echo -e "${GREEN}${BOLD}ROM:${RESET} $ROM_NAME"
+echo -e "${GREEN}${BOLD}DEVICE:${RESET} $DEVICE"
 
-echo "Manifest"
-echo "----------------------------------------"
-echo "Repository   : ${MANIFEST_URL}"
-echo "Branch       : ${MANIFEST_BRANCH}"
-echo "Kernel src   : DISABLED"
-echo "Prebuilt     : ENABLED"
 echo
+echo "Kernel:"
+echo "$PREBUILT_KERNEL"
 
-echo "Output"
-echo "----------------------------------------"
-echo "${PRODUCT_OUT}"
 echo
+echo "ZIP:"
+echo "$ZIP"
 
-echo "Log"
-echo "----------------------------------------"
-echo "${LOG_FILE}"
 echo
+echo "Output:"
+echo "$OUT_DIR"
 
-ok "SELESAI."
+echo
+echo "Build time:"
+echo "$BUILD_TIME seconds"
+
+echo
+echo "============================================================"
+echo "                       DONE"
+echo "============================================================"
