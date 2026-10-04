@@ -3,8 +3,15 @@
 # ============================================================
 # TISSOT MAINLINE - AUTO DETECT & AUTO FIX BUILD SCRIPT
 # ============================================================
-# Berdasarkan script Arden-Vey
-# Menambahkan modul auto-detect dan auto-fix untuk error dtb.img
+# Based on script Arden-Vey
+# Auto-detect & auto-fix untuk error dtb.img
+#
+# FIXES:
+#   - TARGET_DTB_LIST_WILDCARD (Lineage 23.2+)
+#   - Syntax error pada blok FIX 5
+#   - Dummy dtb.img fallback dihapus (bahaya brick)
+#   - Sanity check rule ninja yang generate dtb.img
+#   - Cleanup target_files_intermediates sebelum rebuild
 # ============================================================
 
 # ============================================================
@@ -94,7 +101,7 @@ banner() {
     echo "║  Branch     : lineage-23.2                                      ║"
     echo "║  Build      : userdebug                                         ║"
     echo "║  Kernel     : PREBUILT Image.gz-dtb                             ║"
-    echo "║  Auto-Fix   : ENABLED (dtb.img)                                 ║"
+    echo "║  Auto-Fix   : ENABLED (dtb.img + DTB_LIST_WILDCARD)             ║"
     echo "╚═════════════════════════════════════════════════════════════════╝"
     echo -e "${RESET}"
 }
@@ -351,6 +358,7 @@ variables = {
     "TARGET_PREBUILT_DTB", "BOARD_PREBUILT_DTB", "BOARD_KERNEL_DTB",
     "TARGET_KERNEL_DTB", "TARGET_KERNEL_DTBIMAGE", "BOARD_KERNEL_SEPARATED_DT",
     "BOARD_KERNEL_DTBIMAGE", "BOARD_DTB_IMAGE", "BOARD_INCLUDE_DTB_IN_BOOTIMG",
+    "TARGET_DTB_LIST_WILDCARD",
 }
 
 output = []
@@ -568,18 +576,83 @@ else
 fi
 
 # ------------------------------------------------------------
+# DETEKSI 8: Cek TARGET_DTB_LIST_WILDCARD (Lineage 23.2+)
+# ------------------------------------------------------------
+echo
+echo "[DETEKSI 8] Memeriksa TARGET_DTB_LIST_WILDCARD..."
+
+DTB_WILDCARD=$(grep -nE '^[[:space:]]*TARGET_DTB_LIST_WILDCARD[[:space:]]*[:?+]*=' "$BOARD_CONFIG" || true)
+
+if [ -n "$DTB_WILDCARD" ]; then
+    echo -e "${YELLOW}[DETEKSI]${RESET} TARGET_DTB_LIST_WILDCARD aktif:"
+    echo "$DTB_WILDCARD"
+    echo
+    echo -e "${CYAN}[AUTO-FIX]${RESET} Meng-comment TARGET_DTB_LIST_WILDCARD (prebuilt sudah ada DTB)..."
+
+    sed -i -E 's/^([[:space:]]*TARGET_DTB_LIST_WILDCARD[[:space:]]*[:?+]*=.*)/# AUTO-FIX (prebuilt kernel has DTB): \1/' "$BOARD_CONFIG"
+
+    echo -e "${GREEN}[AUTO-FIX OK]${RESET} TARGET_DTB_LIST_WILDCARD di-comment"
+else
+    echo -e "${GREEN}[OK]${RESET} TARGET_DTB_LIST_WILDCARD tidak digunakan"
+fi
+
+# ------------------------------------------------------------
+# DETEKSI 9: Cek konfigurasi DTB lain di vendor/lineage
+# ------------------------------------------------------------
+echo
+echo "[DETEKSI 9] Memeriksa konfigurasi DTB di vendor lineage tasks..."
+
+LINEAGE_DT_TASK="vendor/lineage/build/tasks/dt_image.mk"
+if [ -f "$LINEAGE_DT_TASK" ]; then
+    if grep -qE 'TARGET_DTB_LIST_WILDCARD|dtb\.img' "$LINEAGE_DT_TASK"; then
+        echo -e "${YELLOW}[INFO]${RESET} File $LINEAGE_DT_TASK mengandung referensi DTB:"
+        grep -nE 'TARGET_DTB_LIST_WILDCARD|dtb\.img|TARGET_PREBUILT_DTB' "$LINEAGE_DT_TASK" || true
+        echo
+        echo -e "${CYAN}[INFO]${RESET} Ini akan di-skip karena TARGET_DTB_LIST_WILDCARD sudah di-comment"
+    else
+        echo -e "${GREEN}[OK]${RESET} Tidak ada referensi DTB bermasalah"
+    fi
+else
+    echo -e "${YELLOW}[WARNING]${RESET} $LINEAGE_DT_TASK tidak ditemukan"
+fi
+
+# ------------------------------------------------------------
 # VERIFIKASI AKHIR
 # ------------------------------------------------------------
 echo
 echo "[VERIFIKASI] Konfigurasi kernel final:"
 echo "--------------------------------------------"
 grep -nE \
-    'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|TARGET_KERNEL_CONFIG|DTB|dtb' \
+    'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|TARGET_KERNEL_CONFIG|TARGET_DTB_LIST_WILDCARD|DTB|dtb' \
     "$BOARD_CONFIG" \
     || true
 
 echo
 echo -e "${GREEN}${BOLD}[AUTO-DETECT & AUTO-FIX SELESAI]${RESET}"
+
+# ============================================================
+# SANITY CHECK: Cari rule yang generate dtb.img
+# ============================================================
+
+section "SANITY CHECK: DTB.IMG GENERATION RULES"
+
+echo
+echo "Mencari referensi aktif dtb.img di tree..."
+
+DTB_RULES=$(grep -rn "dtb\.img" \
+    device/xiaomi/mi89xx-mainline/tissot_mainline/ \
+    vendor/lineage/build/tasks/ \
+    build/make/core/ \
+    2>/dev/null | grep -v "^Binary" | grep -vE ":\s*#" | grep -v "AUTO-FIX" | grep -v "PREBUILT-KERNEL" || true)
+
+if [ -n "$DTB_RULES" ]; then
+    echo -e "${YELLOW}[WARNING]${RESET} Ditemukan referensi dtb.img yang mungkin masih aktif:"
+    echo "$DTB_RULES"
+    echo
+    echo -e "${CYAN}[INFO]${RESET} Kalau build gagal karena dtb.img, kemungkinan dari referensi di atas."
+else
+    echo -e "${GREEN}[OK]${RESET} Tidak ada referensi aktif yang generate dtb.img"
+fi
 
 # ============================================================
 # PRE-BUILD SUMMARY
@@ -652,7 +725,6 @@ if [ $BUILD_STATUS -ne 0 ]; then
         if ! grep -qE '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*[:?+]*=[[:space:]]*prebuilts/kernel/tissot/Image\.gz-dtb' "$BOARD_CONFIG"; then
             echo -e "${CYAN}[AUTO-FIX]${RESET} Menambahkan TARGET_PREBUILT_KERNEL..."
 
-            # Hapus dulu jika ada versi salah
             sed -i -E '/^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*[:?+]*=/d' "$BOARD_CONFIG"
 
             cat >> "$BOARD_CONFIG" <<'EOF'
@@ -671,7 +743,7 @@ EOF
         echo
         echo "[FIX 2] Menonaktifkan semua konfigurasi DTB terpisah..."
 
-        sed -i -E 's/^([[:space:]]*)(BOARD_KERNEL_SEPARATED_DT|BOARD_PREBUILT_DTB|BOARD_KERNEL_DTB|TARGET_PREBUILT_DTB|BOARD_KERNEL_DTBIMAGE|BOARD_DTB_IMAGE|BOARD_PREBUILT_DTBIMAGE_DIR|TARGET_KERNEL_DTB|TARGET_KERNEL_DTBIMAGE)([[:space:]]*[:?+]*=)/\1# AUTO-FIX (dtb.img): \2\3/' "$BOARD_CONFIG"
+        sed -i -E 's/^([[:space:]]*)(BOARD_KERNEL_SEPARATED_DT|BOARD_PREBUILT_DTB|BOARD_KERNEL_DTB|TARGET_PREBUILT_DTB|BOARD_KERNEL_DTBIMAGE|BOARD_DTB_IMAGE|BOARD_PREBUILT_DTBIMAGE_DIR|TARGET_KERNEL_DTB|TARGET_KERNEL_DTBIMAGE|TARGET_DTB_LIST_WILDCARD)([[:space:]]*[:?+]*=)/\1# AUTO-FIX (dtb.img): \2\3/' "$BOARD_CONFIG"
 
         echo -e "${GREEN}[AUTO-FIX OK]${RESET} Konfigurasi DTB terpisah dinonaktifkan"
 
@@ -694,31 +766,38 @@ EOF
         fi
 
         # ------------------------------------------------------------
-        # FIX 4: Buat dummy dtb.img di output (sebagai fallback)
+        # FIX 4: Pastikan Image.gz-dtb ada
         # ------------------------------------------------------------
         echo
-        echo "[FIX 4] Membuat fallback dtb.img di output directory..."
-
-        mkdir -p "$OUT_DIR"
-
-        if [ ! -f "$OUT_DIR/dtb.img" ]; then
-            # Buat file kosong sebagai placeholder
-            touch "$OUT_DIR/dtb.img"
-            echo -e "${GREEN}[AUTO-FIX OK]${RESET} Placeholder dtb.img dibuat di $OUT_DIR"
-        else
-            echo -e "${GREEN}[OK]${RESET} dtb.img sudah ada di output"
-        fi
-
-        # ------------------------------------------------------------
-        # FIX 5: Pastikan Image.gz-dtb ada
-        # ------------------------------------------------------------
-        echo
-        echo "[FIX 5] Memverifikasi Image.gz-dtb..."
+        echo "[FIX 4] Memverifikasi Image.gz-dtb..."
 
         if [ ! -f "$PREBUILT_KERNEL" ]; then
             echo -e "${RED}[ERROR]${RESET} Image.gz-dtb tidak ditemukan, tidak bisa lanjut"
             exit 1
-        fi        echo -e "${GREEN}[OK]${RESET} Image.gz-dtb ada"
+        fi
+        echo -e "${GREEN}[OK]${RESET} Image.gz-dtb ada"
+
+        # ------------------------------------------------------------
+        # FIX 5: Hapus dtb.img yang mungkin sudah dibuat sebelumnya
+        # ------------------------------------------------------------
+        echo
+        echo "[FIX 5] Membersihkan dtb.img dari output directory..."
+
+        if [ -f "$OUT_DIR/dtb.img" ]; then
+            rm -f "$OUT_DIR/dtb.img"
+            echo -e "${GREEN}[AUTO-FIX OK]${RESET} dtb.img dihapus dari output"
+        else
+            echo -e "${GREEN}[OK]${RESET} Tidak ada dtb.img di output"
+        fi
+
+        # ------------------------------------------------------------
+        # FIX 6: Clean target_files_intermediates
+        # ------------------------------------------------------------
+        echo
+        echo "[FIX 6] Membersihkan target_files_intermediates..."
+
+        rm -rf "$OUT_DIR/obj/PACKAGING/target_files_intermediates" 2>/dev/null || true
+        echo -e "${GREEN}[AUTO-FIX OK]${RESET} target_files_intermediates dibersihkan"
 
         # ------------------------------------------------------------
         # VERIFIKASI
@@ -727,7 +806,7 @@ EOF
         echo "[VERIFIKASI] BoardConfig setelah auto-fix:"
         echo "--------------------------------------------"
         grep -nE \
-            'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|DTB|dtb' \
+            'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|TARGET_DTB_LIST_WILDCARD|DTB|dtb' \
             "$BOARD_CONFIG" \
             || true
 
@@ -739,16 +818,13 @@ EOF
         echo -e "${CYAN}${BOLD}Melakukan rebuild otomatis...${RESET}"
         echo
 
-        # Bersihkan output yang bermasalah
-        echo "Membersihkan output bermasalah..."
-        rm -f "$OUT_DIR/dtb.img" 2>/dev/null || true
-
         # Re-lunch untuk memuat konfigurasi baru
         echo "Re-lunch..."
         lunch "$LUNCH_TARGET" >/dev/null 2>&1
 
         # Rebuild
         echo "Rebuild..."
+        BUILD_RESTART=$(date +%s)
         set +e
         mka bacon 2>&1 | tee -a "$LOG_DIR/build.log"
         BUILD_STATUS=${PIPESTATUS[0]}
@@ -771,7 +847,6 @@ EOF
         # ------------------------------------------------------------
         echo -e "${YELLOW}[INFO]${RESET} Error bukan dtb.img, mencoba deteksi error lain..."
 
-        # Cek error umum lain
         OTHER_ERRORS=$(grep -E "FAILED:|error:|Error:" "$LOG_DIR/build.log" | head -n 10 || true)
 
         if [ -n "$OTHER_ERRORS" ]; then
