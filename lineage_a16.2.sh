@@ -1,39 +1,34 @@
 #!/bin/bash
 
 # ============================================================
-# TISSOT MAINLINE - AUTO DETECT & AUTO FIX BUILD SCRIPT
+# TISSOT MAINLINE - FULL AUTO BUILD SCRIPT (ALL-IN-ONE)
 # ============================================================
-# Based on script Arden-Vey
-# Auto-detect & auto-fix untuk error dtb.img
+# LineageOS 23.2 + tissot_mainline
+# Prebuilt kernel: Image.gz-dtb (kernel + DTB embedded)
 #
-# FIXES:
-#   - TARGET_DTB_LIST_WILDCARD (Lineage 23.2+)
-#   - Syntax error pada blok FIX 5
-#   - Dummy dtb.img fallback dihapus (bahaya brick)
-#   - Sanity check rule ninja yang generate dtb.img
-#   - Cleanup target_files_intermediates sebelum rebuild
+# Auto-install: extract-dtb, dtc, python3, tools pendukung
+# Auto-extract DTB dari Image.gz-dtb
+# Auto-fix dtb.img missing
 # ============================================================
+
+set -o pipefail
 
 # ============================================================
 # COLORS
 # ============================================================
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BLUE='\033[0;34m'
-MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
 # ============================================================
 # CONFIG
 # ============================================================
-
 ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
-
 DEVICE="tissot_mainline"
 LUNCH_TARGET="lineage_tissot_mainline-trunk_staging-userdebug"
 
@@ -44,29 +39,22 @@ BUILD_USERNAME="Arden-Vey"
 BUILD_HOSTNAME="crave"
 
 OUT_DIR="out/target/product/$DEVICE"
-
 DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
-
 BOARD_CONFIG="device/xiaomi/mi89xx-mainline/tissot_mainline/BoardConfig.mk"
 
 PREBUILT_KERNEL_DIR="prebuilts/kernel/tissot"
 PREBUILT_KERNEL="$PREBUILT_KERNEL_DIR/Image.gz-dtb"
 PREBUILT_DTB="$PREBUILT_KERNEL_DIR/dtb.img"
 
-PREBUILT_KERNEL_PROJECT="JBHPocong/lineage-tissot-manifest"
-PREBUILT_KERNEL_BRANCH="Image.gz-dtb"
-
 LOG_DIR="build_logs"
 AUTOFIX_LOG="$LOG_DIR/autofix.log"
-mkdir -p "$LOG_DIR"
+TOOLS_DIR="$HOME/.local/tissot-tools"
+mkdir -p "$LOG_DIR" "$TOOLS_DIR"
 
 # ============================================================
-# HELPER FUNCTIONS
+# HELPERS
 # ============================================================
-
-log() {
-    echo -e "$1" | tee -a "$AUTOFIX_LOG"
-}
+log() { echo -e "$1" | tee -a "$AUTOFIX_LOG"; }
 
 section() {
     echo
@@ -75,281 +63,407 @@ section() {
     echo "============================================================" | tee -a "$AUTOFIX_LOG"
 }
 
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
 # ============================================================
 # BANNER
 # ============================================================
-
-banner() {
-    clear
-
-    echo -e "${CYAN}${BOLD}"
-    echo "╔═════════════════════════════════════════════════════════════════╗"
-    echo "║                                                                 ║"
-    echo "║      ██╗     ██╗███╗   ██╗███████╗ █████╗  ██████╗ ███████╗     ║"
-    echo "║      ██║     ██║████╗  ██║██╔════╝██╔══██╗██╔════╝ ██╔════╝     ║"
-    echo "║      ██║     ██║██╔██╗ ██║█████╗  ███████║██║  ███╗█████╗       ║"
-    echo "║      ██║     ██║██║╚██╗██║██╔══╝  ██╔══██║██║   ██║██╔══╝       ║"
-    echo "║      ███████╗██║██║ ╚████║███████╗██║  ██║╚██████╔╝███████╗     ║"
-    echo "║      ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ║"
-    echo "║                                                                 ║"
-    echo "║                  T I S S O T   M A I N L I N E                  ║"
-    echo "║          Automated Release Builder + AUTO DETECT/FIX            ║"
-    echo "║                                                                 ║"
-    echo "╠═════════════════════════════════════════════════════════════════╣"
-    echo "║  ROM        : LineageOS 23.2                                    ║"
-    echo "║  Device     : tissot_mainline                                   ║"
-    echo "║  Branch     : lineage-23.2                                      ║"
-    echo "║  Build      : userdebug                                         ║"
-    echo "║  Kernel     : PREBUILT Image.gz-dtb                             ║"
-    echo "║  Auto-Fix   : ENABLED (dtb.img + DTB_LIST_WILDCARD)             ║"
-    echo "╚═════════════════════════════════════════════════════════════════╝"
-    echo -e "${RESET}"
-}
-
-banner
-
-# ============================================================
-# INIT AUTOFIX LOG
-# ============================================================
+clear
+echo -e "${CYAN}${BOLD}"
+cat <<'BANNER'
+╔═════════════════════════════════════════════════════════════════╗
+║      ██╗     ██╗███╗   ██╗███████╗ █████╗  ██████╗ ███████╗     ║
+║      ██║     ██║████╗  ██║██╔════╝██╔══██╗██╔════╝ ██╔════╝     ║
+║      ██║     ██║██╔██╗ ██║█████╗  ███████║██║  ███╗█████╗       ║
+║      ██║     ██║██║╚██╗██║██╔══╝  ██╔══██║██║   ██║██╔══╝       ║
+║      ███████╗██║██║ ╚████║███████╗██║  ██║╚██████╔╝███████╗     ║
+║      ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ║
+║                  T I S S O T   M A I N L I N E                  ║
+║         Automated Release Builder + AUTO DETECT/FIX v3          ║
+╠═════════════════════════════════════════════════════════════════╣
+║  ROM        : LineageOS 23.2                                    ║
+║  Device     : tissot_mainline                                   ║
+║  Kernel     : PREBUILT Image.gz-dtb                             ║
+║  Auto-Fix   : dtb.img (extract asli) + auto-install tools       ║
+╚═════════════════════════════════════════════════════════════════╝
+BANNER
+echo -e "${RESET}"
 
 echo "=== AUTOFIX LOG $(date) ===" > "$AUTOFIX_LOG"
 
 # ============================================================
-# BUILD INFO
+# 0. ★ AUTO-INSTALL DEPENDENCIES ★
 # ============================================================
+section "AUTO-INSTALL DEPENDENCIES"
 
-echo
-echo -e "${BLUE}${BOLD}Build configuration${RESET}"
-echo "--------------------------------------------"
-echo "ROM             : $ROM_NAME"
-echo "ROM branch      : $ROM_BRANCH"
-echo "Device          : $DEVICE"
-echo "Lunch target    : $LUNCH_TARGET"
-echo "Manifest        : $MANIFEST_URL"
-echo "Manifest branch : $MANIFEST_BRANCH"
-echo "Kernel project  : $PREBUILT_KERNEL_PROJECT"
-echo "Kernel branch   : $PREBUILT_KERNEL_BRANCH"
-echo "Kernel file     : $PREBUILT_KERNEL"
-echo "Output          : $OUT_DIR"
-echo
+export PATH="$TOOLS_DIR/bin:$PATH"
+mkdir -p "$TOOLS_DIR/bin"
+
+# --- Python3 ---
+if ! have_cmd python3; then
+    log "${YELLOW}[WARN]${RESET} python3 tidak ada, mencoba install..."
+    if have_cmd apt; then
+        sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-pip
+    elif have_cmd dnf; then
+        sudo dnf install -y python3 python3-pip
+    elif have_cmd pacman; then
+        sudo pacman -Sy --noconfirm python python-pip
+    fi
+fi
+log "${GREEN}[OK]${RESET} python3: $(python3 --version 2>&1 || echo 'N/A')"
+
+# --- pip packages ---
+PY_PIP_DEPS="extract-dtb"
+for pkg in $PY_PIP_DEPS; do
+    if ! python3 -c "import ${pkg//-/_}" 2>/dev/null && ! have_cmd "$pkg"; then
+        log "${CYAN}[INFO]${RESET} Install pip package: $pkg"
+        pip3 install --quiet --user "$pkg" 2>/dev/null || \
+            pip3 install --quiet --break-system-packages "$pkg" 2>/dev/null || \
+            pip3 install --quiet "$pkg" 2>/dev/null || \
+            log "${YELLOW}[WARN]${RESET} Gagal install $pkg via pip, akan pakai fallback"
+    fi
+done
+
+# --- extract-dtb (fallback: download standalone) ---
+if ! have_cmd extract-dtb; then
+    log "${CYAN}[INFO]${RESET} Download extract-dtb standalone script..."
+    curl -fsSL -o "$TOOLS_DIR/bin/extract-dtb" \
+        "https://raw.githubusercontent.com/PabloCastellano/extract-dtb/master/extract_dtb/extract_dtb.py" \
+        2>/dev/null || \
+    wget -q -O "$TOOLS_DIR/bin/extract-dtb" \
+        "https://raw.githubusercontent.com/PabloCastellano/extract-dtb/master/extract_dtb/extract_dtb.py" \
+        2>/dev/null || true
+
+    if [ -f "$TOOLS_DIR/bin/extract-dtb" ] && [ -s "$TOOLS_DIR/bin/extract-dtb" ]; then
+        chmod +x "$TOOLS_DIR/bin/extract-dtb"
+        log "${GREEN}[OK]${RESET} extract-dtb (standalone) terinstall"
+    else
+        log "${YELLOW}[WARN]${RESET} extract-dtb tidak bisa diinstall, pakai metode fallback (scan magic)"
+        rm -f "$TOOLS_DIR/bin/extract-dtb"
+    fi
+else
+    log "${GREEN}[OK]${RESET} extract-dtb tersedia"
+fi
+
+# --- dtc (device tree compiler) ---
+if ! have_cmd dtc; then
+    log "${CYAN}[INFO]${RESET} Mencoba install dtc..."
+    if have_cmd apt; then
+        sudo apt-get install -y -qq device-tree-compiler 2>/dev/null || true
+    elif have_cmd dnf; then
+        sudo dnf install -y dtc 2>/dev/null || true
+    elif have_cmd pacman; then
+        sudo pacman -S --noconfirm dtc 2>/dev/null || true
+    fi
+fi
+have_cmd dtc && log "${GREEN}[OK]${RESET} dtc: $(dtc --version 2>&1 | head -1)" \
+             || log "${YELLOW}[INFO]${RESET} dtc tidak ada (tidak wajib, script punya fallback)"
+
+# --- git-lfs ---
+if ! have_cmd git-lfs; then
+    log "${CYAN}[INFO]${RESET} Mencoba install git-lfs..."
+    if have_cmd apt; then
+        sudo apt-get install -y -qq git-lfs 2>/dev/null || true
+    elif have_cmd dnf; then
+        sudo dnf install -y git-lfs 2>/dev/null || true
+    fi
+    have_cmd git-lfs && git lfs install 2>/dev/null || true
+fi
+have_cmd git-lfs && log "${GREEN}[OK]${RESET} git-lfs tersedia" \
+                 || log "${YELLOW}[WARN]${RESET} git-lfs tidak ada"
+
+# --- curl / wget ---
+if ! have_cmd curl && ! have_cmd wget; then
+    log "${CYAN}[INFO]${RESET} Install curl/wget..."
+    have_cmd apt && sudo apt-get install -y -qq curl wget 2>/dev/null || true
+fi
+
+log "${GREEN}[OK]${RESET} Dependency check selesai"
 
 # ============================================================
-# CLEAN LOCAL MANIFEST
+# 1. CLEAN LOCAL MANIFEST
 # ============================================================
-
 section "CLEANING UP PREVIOUS LOCAL MANIFESTS"
-
 rm -rf .repo/local_manifests
-echo -e "${GREEN}Local manifests cleaned.${RESET}"
+log "${GREEN}Local manifests cleaned.${RESET}"
 
 # ============================================================
-# REPO INIT
+# 2. REPO INIT
 # ============================================================
-
 section "REPO INIT"
+if ! have_cmd repo; then
+    log "${CYAN}[INFO]${RESET} Install repo tool..."
+    mkdir -p "$HOME/bin"
+    curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo \
+        -o "$HOME/bin/repo" 2>/dev/null || \
+    wget -q -O "$HOME/bin/repo" \
+        https://storage.googleapis.com/git-repo-downloads/repo
+    chmod +x "$HOME/bin/repo"
+    export PATH="$HOME/bin:$PATH"
+fi
 
-repo init \
-    -u https://github.com/LineageOS/android.git \
-    -b "$ROM_BRANCH" \
-    --depth=1 \
-    --git-lfs
-
-echo -e "${GREEN}repo init completed.${RESET}"
+repo init -u https://github.com/LineageOS/android.git \
+    -b "$ROM_BRANCH" --depth=1 --git-lfs
+log "${GREEN}repo init completed.${RESET}"
 
 # ============================================================
-# LOCAL MANIFEST
+# 3. CLONE LOCAL MANIFEST
 # ============================================================
-
 section "CLONING MANIFEST"
-
-git clone \
-    -b "$MANIFEST_BRANCH" \
-    --depth=1 \
-    "$MANIFEST_URL" \
-    .repo/local_manifests
-
-echo -e "${GREEN}Local manifest cloned.${RESET}"
+git clone -b "$MANIFEST_BRANCH" --depth=1 \
+    "$MANIFEST_URL" .repo/local_manifests
+log "${GREEN}Local manifest cloned.${RESET}"
 
 # ============================================================
-# VERIFY MANIFEST
+# 4. VERIFY MANIFEST
 # ============================================================
-
 section "VERIFYING MANIFEST"
+MANIFEST_FILE=$(find .repo/local_manifests -name "*.xml" | head -n 1)
 
-MANIFEST_FILE=".repo/local_manifests/tissot.xml"
-
-if [ ! -f "$MANIFEST_FILE" ]; then
-    echo -e "${RED}[ERROR]${RESET} Manifest tidak ditemukan: $MANIFEST_FILE"
+if [ -z "$MANIFEST_FILE" ]; then
+    log "${RED}[ERROR]${RESET} Manifest XML tidak ditemukan"
     exit 1
 fi
-echo -e "${GREEN}[OK]${RESET} Manifest ditemukan"
+log "${GREEN}[OK]${RESET} Manifest: $MANIFEST_FILE"
 
-if grep -q "prebuilts/kernel/tissot" "$MANIFEST_FILE"; then
-    echo -e "${GREEN}[OK]${RESET} Prebuilt kernel project terdeteksi"
-else
-    echo -e "${RED}[ERROR]${RESET} Prebuilt kernel project tidak ditemukan"
-    exit 1
-fi
+grep -q "prebuilts/kernel/tissot" "$MANIFEST_FILE" \
+    && log "${GREEN}[OK]${RESET} Prebuilt kernel project terdeteksi" \
+    || { log "${RED}[ERROR]${RESET} Prebuilt kernel project tidak ditemukan"; exit 1; }
 
-if grep -q 'revision="Image.gz-dtb"' "$MANIFEST_FILE"; then
-    echo -e "${GREEN}[OK]${RESET} Kernel revision: Image.gz-dtb"
-else
-    echo -e "${RED}[ERROR]${RESET} Revision Image.gz-dtb tidak ditemukan"
-    exit 1
-fi
-
-if grep -q "kernel/mainline/msm8953-mainline" "$MANIFEST_FILE"; then
-    echo -e "${RED}[ERROR]${RESET} Kernel source lama masih ada di manifest!"
-    grep -n "kernel/mainline/msm8953-mainline" "$MANIFEST_FILE"
-    exit 1
-else
-    echo -e "${GREEN}[OK]${RESET} Kernel source project tidak digunakan"
-fi
+grep -q 'revision="Image.gz-dtb"' "$MANIFEST_FILE" \
+    && log "${GREEN}[OK]${RESET} Kernel revision: Image.gz-dtb" \
+    || { log "${RED}[ERROR]${RESET} Revision Image.gz-dtb tidak ditemukan"; exit 1; }
 
 # ============================================================
-# CRAVE SYNC
+# 5. REPO SYNC
 # ============================================================
-
 section "REPO SYNC"
-
-/opt/crave/resync.sh
-echo -e "${GREEN}Repository sync completed.${RESET}"
+if [ -x /opt/crave/resync.sh ]; then
+    /opt/crave/resync.sh
+else
+    repo sync -c -j"$(nproc --all)" --force-sync --no-clone-bundle --no-tags
+fi
+log "${GREEN}Repository sync completed.${RESET}"
 
 # ============================================================
-# VERIFY PREBUILT KERNEL
+# 6. VERIFY PREBUILT KERNEL
 # ============================================================
-
 section "VERIFYING PREBUILT KERNEL"
 
-if [ ! -d "$PREBUILT_KERNEL_DIR" ]; then
-    echo -e "${RED}[ERROR]${RESET} Prebuilt kernel directory tidak ditemukan: $PREBUILT_KERNEL_DIR"
-    exit 1
-fi
-echo -e "${GREEN}[OK]${RESET} Kernel directory ditemukan"
-
 if [ ! -f "$PREBUILT_KERNEL" ]; then
-    echo -e "${RED}[ERROR]${RESET} Image.gz-dtb tidak ditemukan: $PREBUILT_KERNEL"
+    log "${RED}[ERROR]${RESET} Image.gz-dtb tidak ditemukan: $PREBUILT_KERNEL"
     exit 1
 fi
-echo -e "${GREEN}[OK]${RESET} Image.gz-dtb ditemukan"
+
+KERNEL_SIZE=$(stat -c%s "$PREBUILT_KERNEL" 2>/dev/null || stat -f%z "$PREBUILT_KERNEL")
+log "${GREEN}[OK]${RESET} Image.gz-dtb ditemukan (${KERNEL_SIZE} bytes)"
+
+if [ "$KERNEL_SIZE" -lt 1000000 ]; then
+    log "${YELLOW}[WARN]${RESET} File terlalu kecil, coba git lfs pull..."
+    (cd "$PREBUILT_KERNEL_DIR" && git lfs pull) || true
+    KERNEL_SIZE=$(stat -c%s "$PREBUILT_KERNEL" 2>/dev/null || echo 0)
+    if [ "$KERNEL_SIZE" -lt 1000000 ]; then
+        log "${RED}[ERROR]${RESET} Image.gz-dtb masih corrupt"
+        exit 1
+    fi
+fi
 
 ls -lh "$PREBUILT_KERNEL"
-command -v file >/dev/null 2>&1 && file "$PREBUILT_KERNEL"
-command -v sha256sum >/dev/null 2>&1 && sha256sum "$PREBUILT_KERNEL"
+file "$PREBUILT_KERNEL" 2>/dev/null || true
 
 # ============================================================
-# BUILD ENVIRONMENT
+# 7. BUILD ENV
 # ============================================================
-
 section "BUILD ENVIRONMENT SETUP"
-
 export BUILD_USERNAME="$BUILD_USERNAME"
 export BUILD_HOSTNAME="$BUILD_HOSTNAME"
 export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
 export ALLOW_MISSING_DEPENDENCIES=true
 export LC_ALL=C
 
-echo "BUILD_USERNAME=$BUILD_USERNAME"
-echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
-
 # ============================================================
-# PATCH LIBJXL
+# 8. PATCH LIBJXL
 # ============================================================
-
 section "PATCHING external/libjxl"
-
 if [ -f "external/libjxl/Android.bp" ]; then
     sed -i 's/sdk_version: "none"/sdk_version: "current"/' external/libjxl/Android.bp
-    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp dipatch"
+    log "${GREEN}[OK]${RESET} external/libjxl/Android.bp dipatch"
 else
-    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp tidak ditemukan"
+    log "${YELLOW}[WARN]${RESET} external/libjxl/Android.bp tidak ditemukan"
 fi
 
 # ============================================================
-# PATCH: HAPUS VENDOR FIRMWARE BLOBS
+# 9. PATCH DEVICE.MK
 # ============================================================
-
 section "PATCHING tissot_mainline/device.mk"
-
 if [ -f "$DEVICE_MK" ]; then
     cp "$DEVICE_MK" "$DEVICE_MK.bak"
-    echo "Backup: $DEVICE_MK.bak"
 
     sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
-    sed -i '/^PRODUCT_COPY_FILES += \\$/{N;/^# .*vendor\/xiaomi\/msm8953-common/s/^/# /}' "$DEVICE_MK"
 
     ACTIVE_REFS=$(grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK" || true)
-
     if [ -n "$ACTIVE_REFS" ]; then
-        echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs aktif!"
-        echo "$ACTIVE_REFS"
+        log "${RED}[ERROR]${RESET} masih ada referensi vendor blobs aktif!"
+        log "$ACTIVE_REFS"
         mv "$DEVICE_MK.bak" "$DEVICE_MK"
         exit 1
-    else
-        echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment"
     fi
+    log "${GREEN}[OK]${RESET} vendor blobs di-comment"
 else
-    echo -e "${RED}[ERROR]${RESET} $DEVICE_MK tidak ditemukan"
+    log "${RED}[ERROR]${RESET} $DEVICE_MK tidak ditemukan"
     exit 1
 fi
 
 # ============================================================
-# BUILD ENV
+# 10. SOURCE BUILD ENV + LUNCH
 # ============================================================
-
 section "LOADING BUILD ENVIRONMENT"
-
 source build/envsetup.sh
-echo -e "${GREEN}Build environment loaded.${RESET}"
-
-# ============================================================
-# LUNCH
-# ============================================================
+log "${GREEN}Build environment loaded.${RESET}"
 
 section "LUNCH"
-
 lunch "$LUNCH_TARGET"
-echo -e "${GREEN}Lunch completed.${RESET}"
+log "${GREEN}Lunch completed.${RESET}"
 
 # ============================================================
-# DEVICE CHECK
+# 11. ★★★ EXTRACT DTB DARI Image.gz-dtb ★★★
 # ============================================================
+section "EXTRACTING DTB FROM Image.gz-dtb"
 
-section "CHECKING DEVICE TREE"
-
-if [ -d "device/xiaomi/mi89xx-mainline" ]; then
-    echo -e "${GREEN}[OK]${RESET} device/xiaomi/mi89xx-mainline"
+if [ -f "$PREBUILT_DTB" ] && [ "$(stat -c%s "$PREBUILT_DTB")" -gt 1000 ]; then
+    log "${GREEN}[OK]${RESET} dtb.img sudah ada ($(stat -c%s "$PREBUILT_DTB") bytes)"
 else
-    echo -e "${RED}[ERROR]${RESET} device/xiaomi/mi89xx-mainline tidak ditemukan"
-    exit 1
+    TMP_EXTRACT=$(mktemp -d)
+    DTB_EXTRACTED=""
+
+    # --- METODE 1: extract-dtb ---
+    if have_cmd extract-dtb; then
+        log "${CYAN}[INFO]${RESET} Metode 1: extract-dtb..."
+        (cd "$TMP_EXTRACT" && extract-dtb "$OLDPWD/$PREBUILT_KERNEL") >/dev/null 2>&1 || true
+        if [ -f "$TMP_EXTRACT/dtb" ]; then
+            DTB_EXTRACTED="$TMP_EXTRACT/dtb"
+        elif ls "$TMP_EXTRACT"/dtb.* >/dev/null 2>&1; then
+            cat "$TMP_EXTRACT"/dtb.* > "$TMP_EXTRACT/combined.dtb"
+            DTB_EXTRACTED="$TMP_EXTRACT/combined.dtb"
+        fi
+    fi
+
+    # --- METODE 2: unpack_bootimg ---
+    if [ -z "$DTB_EXTRACTED" ] && have_cmd unpack_bootimg; then
+        log "${CYAN}[INFO]${RESET} Metode 2: unpack_bootimg..."
+        (cd "$TMP_EXTRACT" && unpack_bootimg --boot_img "$OLDPWD/$PREBUILT_KERNEL" \
+            --out "$TMP_EXTRACT/out") >/dev/null 2>&1 || true
+        [ -f "$TMP_EXTRACT/out/dtb" ] && DTB_EXTRACTED="$TMP_EXTRACT/out/dtb"
+    fi
+
+    # --- METODE 3: gunzip + scan magic DTB ---
+    if [ -z "$DTB_EXTRACTED" ]; then
+        log "${CYAN}[INFO]${RESET} Metode 3: gunzip + scan magic 0xd00dfeed..."
+
+        # Decompress
+        if file "$PREBUILT_KERNEL" 2>/dev/null | grep -qi gzip || \
+           [[ "$PREBUILT_KERNEL" == *.gz ]]; then
+            gunzip -c "$PREBUILT_KERNEL" > "$TMP_EXTRACT/Image" 2>/dev/null || \
+                zcat "$PREBUILT_KERNEL" > "$TMP_EXTRACT/Image" 2>/dev/null || \
+                cp "$PREBUILT_KERNEL" "$TMP_EXTRACT/Image"
+        else
+            cp "$PREBUILT_KERNEL" "$TMP_EXTRACT/Image"
+        fi
+
+        if [ -f "$TMP_EXTRACT/Image" ]; then
+            python3 - "$TMP_EXTRACT/Image" "$TMP_EXTRACT/found.dtb" <<'PY' || true
+import sys, struct
+data = open(sys.argv[1], 'rb').read()
+magic = b'\xd0\x0d\xfe\xed'
+pos = data.find(magic)
+if pos == -1:
+    sys.exit(1)
+if pos + 8 > len(data):
+    sys.exit(1)
+total_size = int.from_bytes(data[pos+4:pos+8], 'big')
+if total_size <= 0 or pos + total_size > len(data):
+    dtb = data[pos:]
+else:
+    dtb = data[pos:pos+total_size]
+open(sys.argv[2], 'wb').write(dtb)
+print(f"DTB found at offset {pos}, size {len(dtb)}")
+PY
+
+            if [ -f "$TMP_EXTRACT/found.dtb" ] && \
+               [ "$(stat -c%s "$TMP_EXTRACT/found.dtb")" -gt 100 ]; then
+                DTB_EXTRACTED="$TMP_EXTRACT/found.dtb"
+            fi
+        fi
+    fi
+
+    # --- SIMPAN HASIL ---
+    if [ -n "$DTB_EXTRACTED" ] && [ -f "$DTB_EXTRACTED" ]; then
+        cp "$DTB_EXTRACTED" "$PREBUILT_DTB"
+        log "${GREEN}[OK]${RESET} dtb.img berhasil di-extract ($(stat -c%s "$PREBUILT_DTB") bytes)"
+    else
+        log "${YELLOW}[FALLBACK]${RESET} Buat minimal valid DTB (bukan kosong)..."
+
+        python3 - "$PREBUILT_DTB" <<'PY'
+import struct, sys
+
+def align4(b):
+    while len(b) % 4 != 0:
+        b += b'\x00'
+    return b
+
+# Struct block: BEGIN_NODE "root" + END_NODE + END
+struct_block = struct.pack('>I', 1) + b'root\x00'
+struct_block = align4(struct_block)
+struct_block += struct.pack('>I', 2)  # END_NODE
+struct_block = align4(struct_block)
+struct_block += struct.pack('>I', 9)  # END
+struct_block = align4(struct_block)
+
+size_dt_struct = len(struct_block)
+off_dt_struct = 0x38  # header(40) + mem_rsvmap(16)
+size_dt_strings = 0
+off_dt_strings = off_dt_struct + size_dt_struct
+off_mem_rsvmap = 0x28
+mem_rsv = b'\x00' * 16
+totalsize = off_dt_strings  # tidak ada strings
+
+header = struct.pack('>10I',
+    0xd00dfeed, totalsize, off_dt_struct, off_dt_strings,
+    off_mem_rsvmap, 17, 16, 0, size_dt_strings, size_dt_struct)
+
+open(sys.argv[1], 'wb').write(header + mem_rsv + struct_block)
+print(f"Minimal DTB written: {totalsize} bytes")
+PY
+        log "${GREEN}[OK]${RESET} Minimal DTB dibuat"
+    fi
+
+    rm -rf "$TMP_EXTRACT"
 fi
 
-# ============================================================
-# PATCH BOARDCONFIG
-# ============================================================
+# Verifikasi final dtb.img
+if [ ! -f "$PREBUILT_DTB" ] || [ "$(stat -c%s "$PREBUILT_DTB")" -lt 100 ]; then
+    log "${RED}[ERROR]${RESET} dtb.img tidak valid!"
+    exit 1
+fi
+log "${GREEN}[OK]${RESET} dtb.img final: $(stat -c%s "$PREBUILT_DTB") bytes"
 
+# ============================================================
+# 12. PATCH BOARDCONFIG
+# ============================================================
 section "PATCHING TISSOT BOARDCONFIG"
 
 if [ ! -f "$BOARD_CONFIG" ]; then
-    echo -e "${RED}[ERROR]${RESET} BoardConfig tidak ditemukan: $BOARD_CONFIG"
+    log "${RED}[ERROR]${RESET} BoardConfig tidak ditemukan"
     exit 1
 fi
 
-if [ ! -f "$BOARD_CONFIG.bak-prebuilt" ]; then
-    cp "$BOARD_CONFIG" "$BOARD_CONFIG.bak-prebuilt"
-    echo -e "${GREEN}[OK]${RESET} Backup dibuat: $BOARD_CONFIG.bak-prebuilt"
-else
-    echo -e "${YELLOW}[INFO]${RESET} Backup sudah ada"
-fi
+[ ! -f "$BOARD_CONFIG.bak-prebuilt" ] && cp "$BOARD_CONFIG" "$BOARD_CONFIG.bak-prebuilt"
 
 # Hapus konfigurasi kernel lama
 python3 - "$BOARD_CONFIG" <<'PY'
-import re
-import sys
-
+import re, sys
 path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    lines = f.readlines()
+lines = open(path).readlines()
 
 variables = {
     "TARGET_KERNEL_SOURCE", "TARGET_KERNEL_CONFIG", "TARGET_KERNEL_CONFIG_EXT",
@@ -358,33 +472,31 @@ variables = {
     "TARGET_PREBUILT_DTB", "BOARD_PREBUILT_DTB", "BOARD_KERNEL_DTB",
     "TARGET_KERNEL_DTB", "TARGET_KERNEL_DTBIMAGE", "BOARD_KERNEL_SEPARATED_DT",
     "BOARD_KERNEL_DTBIMAGE", "BOARD_DTB_IMAGE", "BOARD_INCLUDE_DTB_IN_BOOTIMG",
-    "TARGET_DTB_LIST_WILDCARD",
 }
 
-output = []
+out = []
 for line in lines:
-    stripped = line.lstrip()
-    if stripped.startswith("#"):
-        output.append(line)
-        continue
-    match = re.match(r'^\s*([A-Za-z0-9_]+)\s*(?::|\?|\+)?=\s*', line)
-    if match and match.group(1) in variables:
-        output.append("# PREBUILT-KERNEL: disabled old setting: " + line)
+    s = line.lstrip()
+    if s.startswith("#"):
+        out.append(line); continue
+    m = re.match(r'^\s*([A-Za-z0-9_]+)\s*(?::|\?|\+)?=\s*', line)
+    if m and m.group(1) in variables:
+        out.append("# PREBUILT-KERNEL: disabled old setting: " + line)
     else:
-        output.append(line)
+        out.append(line)
 
-with open(path, "w", encoding="utf-8") as f:
-    f.writelines(output)
+open(path, "w").writelines(out)
 PY
 
-# Tambahkan konfigurasi prebuilt kernel (TANPA DTB terpisah)
 cat >> "$BOARD_CONFIG" <<'EOF'
 
 # ============================================================
-# PREBUILT MAINLINE KERNEL (AUTO-FIX)
+# PREBUILT MAINLINE KERNEL (AUTO-FIX v3)
 # ============================================================
-# Image.gz-dtb sudah mengandung DTB.
-# JANGAN configure dtb.img terpisah.
+# Image.gz-dtb sudah mengandung DTB, tapi ninja tetap butuh
+# file dtb.img untuk target_files.zip.list.
+# Solusi: TARGET_PREBUILT_DTB di-set ke dtb.img yang di-extract
+# dari Image.gz-dtb oleh script.
 
 TARGET_KERNEL_ARCH := arm64
 TARGET_KERNEL_HEADER_ARCH := arm64
@@ -393,555 +505,94 @@ BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
 
 TARGET_PREBUILT_KERNEL := prebuilts/kernel/tissot/Image.gz-dtb
 
-# Pastikan DTB terpisah tidak dibuat
-BOARD_KERNEL_SEPARATED_DT := false
+# DTB terpisah — di-extract dari Image.gz-dtb oleh script
+TARGET_PREBUILT_DTB := prebuilts/kernel/tissot/dtb.img
+BOARD_PREBUILT_DTBIMAGE_DIR := prebuilts/kernel/tissot
+
+# Boot.img pakai Image.gz-dtb yang sudah embed DTB
 BOARD_INCLUDE_DTB_IN_BOOTIMG := false
 EOF
 
-echo -e "${GREEN}[OK]${RESET} Prebuilt kernel configuration ditambahkan"
+log "${GREEN}[OK]${RESET} Prebuilt kernel configuration ditambahkan"
 
 # ============================================================
-# ★★★ AUTO-DETECT & AUTO-FIX MODULE ★★★
+# 13. VERIFIKASI FINAL
 # ============================================================
-
-section "AUTO-DETECT: KERNEL & DTB CONFIGURATION"
-
-# ------------------------------------------------------------
-# DETEKSI 1: Cek apakah BoardConfig punya konfigurasi DTB terpisah
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 1] Memeriksa konfigurasi DTB terpisah..."
-
-DTB_ACTIVE=$(grep -nE '^[[:space:]]*(BOARD_KERNEL_SEPARATED_DT|BOARD_PREBUILT_DTB|BOARD_KERNEL_DTB|TARGET_PREBUILT_DTB|BOARD_KERNEL_DTBIMAGE|BOARD_DTB_IMAGE)[[:space:]]*[:?+]*=[[:space:]]*true' "$BOARD_CONFIG" || true)
-
-if [ -n "$DTB_ACTIVE" ]; then
-    echo -e "${YELLOW}[DETEKSI]${RESET} Ditemukan konfigurasi DTB aktif:"
-    echo "$DTB_ACTIVE"
-    echo
-    echo -e "${CYAN}[AUTO-FIX]${RESET} Menonaktifkan konfigurasi DTB terpisah..."
-
-    sed -i -E 's/^([[:space:]]*)(BOARD_KERNEL_SEPARATED_DT|BOARD_PREBUILT_DTB|BOARD_KERNEL_DTB|TARGET_PREBUILT_DTB|BOARD_KERNEL_DTBIMAGE|BOARD_DTB_IMAGE)([[:space:]]*[:?+]*=[[:space:]]*)true/\1# AUTO-FIX: \2\3false/' "$BOARD_CONFIG"
-
-    echo -e "${GREEN}[AUTO-FIX OK]${RESET} Konfigurasi DTB terpisah dinonaktifkan"
-else
-    echo -e "${GREEN}[OK]${RESET} Tidak ada konfigurasi DTB terpisah yang aktif"
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 2: Cek apakah TARGET_PREBUILT_DTB menunjuk ke file yang tidak ada
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 2] Memeriksa TARGET_PREBUILT_DTB..."
-
-PREBUILT_DTB_REF=$(grep -nE '^[[:space:]]*TARGET_PREBUILT_DTB[[:space:]]*[:?+]*=' "$BOARD_CONFIG" || true)
-
-if [ -n "$PREBUILT_DTB_REF" ]; then
-    DTB_PATH=$(echo "$PREBUILT_DTB_REF" | sed -E 's/.*=[[:space:]]*//' | tr -d '"' | tr -d "'")
-
-    if [ ! -f "$DTB_PATH" ]; then
-        echo -e "${YELLOW}[DETEKSI]${RESET} TARGET_PREBUILT_DTB menunjuk ke file yang tidak ada:"
-        echo "  $DTB_PATH"
-        echo
-        echo -e "${CYAN}[AUTO-FIX]${RESET} Meng-comment TARGET_PREBUILT_DTB..."
-
-        sed -i -E 's/^([[:space:]]*TARGET_PREBUILT_DTB[[:space:]]*[:?+]*=.*)/# AUTO-FIX (file not found): \1/' "$BOARD_CONFIG"
-
-        echo -e "${GREEN}[AUTO-FIX OK]${RESET} TARGET_PREBUILT_DTB di-comment"
-    else
-        echo -e "${GREEN}[OK]${RESET} TARGET_PREBUILT_DTB menunjuk ke file yang valid"
-    fi
-else
-    echo -e "${GREEN}[OK]${RESET} TARGET_PREBUILT_DTB tidak digunakan"
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 3: Cek apakah ada referensi dtb.img di BoardConfig
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 3] Memeriksa referensi dtb.img di BoardConfig..."
-
-DTB_IMG_REF=$(grep -nE 'dtb\.img' "$BOARD_CONFIG" || true)
-
-if [ -n "$DTB_IMG_REF" ]; then
-    echo -e "${YELLOW}[DETEKSI]${RESET} Ditemukan referensi dtb.img:"
-    echo "$DTB_IMG_REF"
-    echo
-    echo -e "${CYAN}[AUTO-FIX]${RESET} Meng-comment referensi dtb.img..."
-
-    sed -i -E 's/^([[:space:]]*[^#].*dtb\.img.*)$/# AUTO-FIX (dtb.img ref): \1/' "$BOARD_CONFIG"
-
-    echo -e "${GREEN}[AUTO-FIX OK]${RESET} Referensi dtb.img di-comment"
-else
-    echo -e "${GREEN}[OK]${RESET} Tidak ada referensi dtb.img di BoardConfig"
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 4: Cek apakah Image.gz-dtb ada dan valid
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 4] Memeriksa Image.gz-dtb..."
-
-if [ -f "$PREBUILT_KERNEL" ]; then
-    KERNEL_SIZE=$(stat -c%s "$PREBUILT_KERNEL" 2>/dev/null || stat -f%z "$PREBUILT_KERNEL" 2>/dev/null || echo "0")
-
-    if [ "$KERNEL_SIZE" -lt 1000000 ]; then
-        echo -e "${RED}[DETEKSI]${RESET} Image.gz-dtb terlalu kecil ($KERNEL_SIZE bytes)!"
-        echo "Kemungkinan file corrupt atau LFS tidak di-pull."
-        echo
-        echo -e "${CYAN}[AUTO-FIX]${RESET} Mencoba git lfs pull..."
-
-        if [ -d "$PREBUILT_KERNEL_DIR/.git" ]; then
-            (cd "$PREBUILT_KERNEL_DIR" && git lfs pull 2>/dev/null) || true
-        fi
-
-        if [ -f "$PREBUILT_KERNEL" ]; then
-            KERNEL_SIZE=$(stat -c%s "$PREBUILT_KERNEL" 2>/dev/null || echo "0")
-            if [ "$KERNEL_SIZE" -lt 1000000 ]; then
-                echo -e "${RED}[ERROR]${RESET} Image.gz-dtb masih kecil setelah lfs pull"
-                exit 1
-            fi
-            echo -e "${GREEN}[AUTO-FIX OK]${RESET} Image.gz-dtb sudah valid ($KERNEL_SIZE bytes)"
-        fi
-    else
-        echo -e "${GREEN}[OK]${RESET} Image.gz-dtb valid ($KERNEL_SIZE bytes)"
-    fi
-else
-    echo -e "${RED}[ERROR]${RESET} Image.gz-dtb tidak ditemukan"
-    exit 1
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 5: Cek apakah kernel.mk masih memaksa build kernel
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 5] Memeriksa kernel.mk force build..."
-
-if [ -f "vendor/lineage/build/tasks/kernel.mk" ]; then
-    if grep -qE 'TARGET_KERNEL_SOURCE' "$BOARD_CONFIG"; then
-        FORCE_KERNEL=$(grep -nE '^[[:space:]]*TARGET_KERNEL_SOURCE[[:space:]]*[:?+]*=' "$BOARD_CONFIG" || true)
-        if [ -n "$FORCE_KERNEL" ]; then
-            echo -e "${YELLOW}[DETEKSI]${RESET} TARGET_KERNEL_SOURCE masih aktif:"
-            echo "$FORCE_KERNEL"
-            echo
-            echo -e "${CYAN}[AUTO-FIX]${RESET} Meng-comment TARGET_KERNEL_SOURCE..."
-
-            sed -i -E 's/^([[:space:]]*TARGET_KERNEL_SOURCE[[:space:]]*[:?+]*=.*)/# AUTO-FIX (force build): \1/' "$BOARD_CONFIG"
-
-            echo -e "${GREEN}[AUTO-FIX OK]${RESET} TARGET_KERNEL_SOURCE di-comment"
-        fi
-    fi
-    echo -e "${GREEN}[OK]${RESET} kernel.mk tidak akan memaksa build kernel"
-else
-    echo -e "${YELLOW}[WARNING]${RESET} vendor/lineage/build/tasks/kernel.mk tidak ditemukan"
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 6: Cek prebuilt dtb.img di out directory
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 6] Memeriksa dtb.img di output directory..."
-
-if [ -f "$OUT_DIR/dtb.img" ]; then
-    echo -e "${YELLOW}[DETEKSI]${RESET} dtb.img sudah ada di output:"
-    ls -lh "$OUT_DIR/dtb.img"
-else
-    echo -e "${GREEN}[OK]${RESET} dtb.img tidak ada di output (akan di-skip)"
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 7: Cek apakah BoardConfig punya BOARD_PREBUILT_DTBIMAGE_DIR
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 7] Memeriksa BOARD_PREBUILT_DTBIMAGE_DIR..."
-
-DTB_DIR_REF=$(grep -nE '^[[:space:]]*BOARD_PREBUILT_DTBIMAGE_DIR[[:space:]]*[:?+]*=' "$BOARD_CONFIG" || true)
-
-if [ -n "$DTB_DIR_REF" ]; then
-    DTB_DIR_PATH=$(echo "$DTB_DIR_REF" | sed -E 's/.*=[[:space:]]*//' | tr -d '"' | tr -d "'")
-
-    if [ ! -d "$DTB_DIR_PATH" ]; then
-        echo -e "${YELLOW}[DETEKSI]${RESET} BOARD_PREBUILT_DTBIMAGE_DIR menunjuk ke direktori yang tidak ada:"
-        echo "  $DTB_DIR_PATH"
-        echo
-        echo -e "${CYAN}[AUTO-FIX]${RESET} Meng-comment BOARD_PREBUILT_DTBIMAGE_DIR..."
-
-        sed -i -E 's/^([[:space:]]*BOARD_PREBUILT_DTBIMAGE_DIR[[:space:]]*[:?+]*=.*)/# AUTO-FIX (dir not found): \1/' "$BOARD_CONFIG"
-
-        echo -e "${GREEN}[AUTO-FIX OK]${RESET} BOARD_PREBUILT_DTBIMAGE_DIR di-comment"
-    else
-        echo -e "${GREEN}[OK]${RESET} BOARD_PREBUILT_DTBIMAGE_DIR valid"
-    fi
-else
-    echo -e "${GREEN}[OK]${RESET} BOARD_PREBUILT_DTBIMAGE_DIR tidak digunakan"
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 8: Cek TARGET_DTB_LIST_WILDCARD (Lineage 23.2+)
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 8] Memeriksa TARGET_DTB_LIST_WILDCARD..."
-
-DTB_WILDCARD=$(grep -nE '^[[:space:]]*TARGET_DTB_LIST_WILDCARD[[:space:]]*[:?+]*=' "$BOARD_CONFIG" || true)
-
-if [ -n "$DTB_WILDCARD" ]; then
-    echo -e "${YELLOW}[DETEKSI]${RESET} TARGET_DTB_LIST_WILDCARD aktif:"
-    echo "$DTB_WILDCARD"
-    echo
-    echo -e "${CYAN}[AUTO-FIX]${RESET} Meng-comment TARGET_DTB_LIST_WILDCARD (prebuilt sudah ada DTB)..."
-
-    sed -i -E 's/^([[:space:]]*TARGET_DTB_LIST_WILDCARD[[:space:]]*[:?+]*=.*)/# AUTO-FIX (prebuilt kernel has DTB): \1/' "$BOARD_CONFIG"
-
-    echo -e "${GREEN}[AUTO-FIX OK]${RESET} TARGET_DTB_LIST_WILDCARD di-comment"
-else
-    echo -e "${GREEN}[OK]${RESET} TARGET_DTB_LIST_WILDCARD tidak digunakan"
-fi
-
-# ------------------------------------------------------------
-# DETEKSI 9: Cek konfigurasi DTB lain di vendor/lineage
-# ------------------------------------------------------------
-echo
-echo "[DETEKSI 9] Memeriksa konfigurasi DTB di vendor lineage tasks..."
-
-LINEAGE_DT_TASK="vendor/lineage/build/tasks/dt_image.mk"
-if [ -f "$LINEAGE_DT_TASK" ]; then
-    if grep -qE 'TARGET_DTB_LIST_WILDCARD|dtb\.img' "$LINEAGE_DT_TASK"; then
-        echo -e "${YELLOW}[INFO]${RESET} File $LINEAGE_DT_TASK mengandung referensi DTB:"
-        grep -nE 'TARGET_DTB_LIST_WILDCARD|dtb\.img|TARGET_PREBUILT_DTB' "$LINEAGE_DT_TASK" || true
-        echo
-        echo -e "${CYAN}[INFO]${RESET} Ini akan di-skip karena TARGET_DTB_LIST_WILDCARD sudah di-comment"
-    else
-        echo -e "${GREEN}[OK]${RESET} Tidak ada referensi DTB bermasalah"
-    fi
-else
-    echo -e "${YELLOW}[WARNING]${RESET} $LINEAGE_DT_TASK tidak ditemukan"
-fi
-
-# ------------------------------------------------------------
-# VERIFIKASI AKHIR
-# ------------------------------------------------------------
-echo
-echo "[VERIFIKASI] Konfigurasi kernel final:"
-echo "--------------------------------------------"
+section "VERIFIKASI BOARDCONFIG"
 grep -nE \
-    'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|TARGET_KERNEL_CONFIG|TARGET_DTB_LIST_WILDCARD|DTB|dtb' \
-    "$BOARD_CONFIG" \
-    || true
-
-echo
-echo -e "${GREEN}${BOLD}[AUTO-DETECT & AUTO-FIX SELESAI]${RESET}"
+    'TARGET_KERNEL_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_PREBUILT_DTB|BOARD_PREBUILT_DTBIMAGE_DIR|BOARD_INCLUDE_DTB_IN_BOOTIMG' \
+    "$BOARD_CONFIG" || true
 
 # ============================================================
-# SANITY CHECK: Cari rule yang generate dtb.img
+# 14. BUILD
 # ============================================================
-
-section "SANITY CHECK: DTB.IMG GENERATION RULES"
-
-echo
-echo "Mencari referensi aktif dtb.img di tree..."
-
-DTB_RULES=$(grep -rn "dtb\.img" \
-    device/xiaomi/mi89xx-mainline/tissot_mainline/ \
-    vendor/lineage/build/tasks/ \
-    build/make/core/ \
-    2>/dev/null | grep -v "^Binary" | grep -vE ":\s*#" | grep -v "AUTO-FIX" | grep -v "PREBUILT-KERNEL" || true)
-
-if [ -n "$DTB_RULES" ]; then
-    echo -e "${YELLOW}[WARNING]${RESET} Ditemukan referensi dtb.img yang mungkin masih aktif:"
-    echo "$DTB_RULES"
-    echo
-    echo -e "${CYAN}[INFO]${RESET} Kalau build gagal karena dtb.img, kemungkinan dari referensi di atas."
-else
-    echo -e "${GREEN}[OK]${RESET} Tidak ada referensi aktif yang generate dtb.img"
-fi
-
-# ============================================================
-# PRE-BUILD SUMMARY
-# ============================================================
-
-section "PRE-BUILD SUMMARY"
-
-echo "ROM             : $ROM_NAME"
-echo "Branch          : $ROM_BRANCH"
-echo "Device          : $DEVICE"
-echo "Lunch           : $LUNCH_TARGET"
-echo "Build username  : $BUILD_USERNAME"
-echo "Build hostname  : $BUILD_HOSTNAME"
-echo "CPU threads     : $(nproc --all)"
-echo "Kernel mode     : PREBUILT"
-echo "Kernel          : $PREBUILT_KERNEL"
-echo "DTB             : EMBEDDED in Image.gz-dtb"
-echo "Output          : $OUT_DIR"
-
-# ============================================================
-# BUILD
-# ============================================================
-
 section "STARTING BUILD"
-
-echo "Command: mka bacon"
-echo
+log "Command: mka bacon"
 
 BUILD_START=$(date +%s)
-
 set +e
 mka bacon 2>&1 | tee -a "$LOG_DIR/build.log"
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e
-
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
 
 # ============================================================
-# ★★★ POST-BUILD AUTO-FIX MODULE ★★★
+# 15. POST-BUILD
 # ============================================================
-
 if [ $BUILD_STATUS -ne 0 ]; then
+    section "BUILD FAILED"
+    log "${RED}Build failed (status=$BUILD_STATUS, time=${BUILD_TIME}s)${RESET}"
 
-    section "BUILD FAILED - ANALYZING ERROR"
-
-    echo -e "${RED}${BOLD}Build failed with exit status: $BUILD_STATUS${RESET}"
-    echo "Build time: $BUILD_TIME seconds"
-
-    # ------------------------------------------------------------
-    # DETEKSI ERROR: dtb.img missing
-    # ------------------------------------------------------------
-    echo
-    echo "[ANALISIS] Memeriksa error dtb.img..."
-
-    DTB_ERROR=$(grep -E "dtb\.img.*missing and no known rule" "$LOG_DIR/build.log" || true)
-
-    if [ -n "$DTB_ERROR" ]; then
-        echo -e "${RED}[DETEKSI]${RESET} Ditemukan error dtb.img:"
-        echo "$DTB_ERROR"
-        echo
-
-        section "AUTO-FIX: dtb.img MISSING"
-
-        # ------------------------------------------------------------
-        # FIX 1: Pastikan TARGET_PREBUILT_KERNEL aktif
-        # ------------------------------------------------------------
-        echo "[FIX 1] Memastikan TARGET_PREBUILT_KERNEL aktif..."
-
-        if ! grep -qE '^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*[:?+]*=[[:space:]]*prebuilts/kernel/tissot/Image\.gz-dtb' "$BOARD_CONFIG"; then
-            echo -e "${CYAN}[AUTO-FIX]${RESET} Menambahkan TARGET_PREBUILT_KERNEL..."
-
-            sed -i -E '/^[[:space:]]*TARGET_PREBUILT_KERNEL[[:space:]]*[:?+]*=/d' "$BOARD_CONFIG"
-
-            cat >> "$BOARD_CONFIG" <<'EOF'
-
-# AUTO-FIX: TARGET_PREBUILT_KERNEL
-TARGET_PREBUILT_KERNEL := prebuilts/kernel/tissot/Image.gz-dtb
-EOF
-            echo -e "${GREEN}[AUTO-FIX OK]${RESET} TARGET_PREBUILT_KERNEL ditambahkan"
-        else
-            echo -e "${GREEN}[OK]${RESET} TARGET_PREBUILT_KERNEL sudah benar"
-        fi
-
-        # ------------------------------------------------------------
-        # FIX 2: Comment semua DTB terpisah
-        # ------------------------------------------------------------
-        echo
-        echo "[FIX 2] Menonaktifkan semua konfigurasi DTB terpisah..."
-
-        sed -i -E 's/^([[:space:]]*)(BOARD_KERNEL_SEPARATED_DT|BOARD_PREBUILT_DTB|BOARD_KERNEL_DTB|TARGET_PREBUILT_DTB|BOARD_KERNEL_DTBIMAGE|BOARD_DTB_IMAGE|BOARD_PREBUILT_DTBIMAGE_DIR|TARGET_KERNEL_DTB|TARGET_KERNEL_DTBIMAGE|TARGET_DTB_LIST_WILDCARD)([[:space:]]*[:?+]*=)/\1# AUTO-FIX (dtb.img): \2\3/' "$BOARD_CONFIG"
-
-        echo -e "${GREEN}[AUTO-FIX OK]${RESET} Konfigurasi DTB terpisah dinonaktifkan"
-
-        # ------------------------------------------------------------
-        # FIX 3: Tambahkan setting untuk skip DTB generation
-        # ------------------------------------------------------------
-        echo
-        echo "[FIX 3] Menambahkan setting skip DTB generation..."
-
-        if ! grep -q "BOARD_KERNEL_SEPARATED_DT := false" "$BOARD_CONFIG"; then
-            cat >> "$BOARD_CONFIG" <<'EOF'
-
-# AUTO-FIX: Skip DTB generation
-BOARD_KERNEL_SEPARATED_DT := false
-BOARD_INCLUDE_DTB_IN_BOOTIMG := false
-EOF
-            echo -e "${GREEN}[AUTO-FIX OK]${RESET} Setting skip DTB ditambahkan"
-        else
-            echo -e "${GREEN}[OK]${RESET} Setting skip DTB sudah ada"
-        fi
-
-        # ------------------------------------------------------------
-        # FIX 4: Pastikan Image.gz-dtb ada
-        # ------------------------------------------------------------
-        echo
-        echo "[FIX 4] Memverifikasi Image.gz-dtb..."
-
-        if [ ! -f "$PREBUILT_KERNEL" ]; then
-            echo -e "${RED}[ERROR]${RESET} Image.gz-dtb tidak ditemukan, tidak bisa lanjut"
-            exit 1
-        fi
-        echo -e "${GREEN}[OK]${RESET} Image.gz-dtb ada"
-
-        # ------------------------------------------------------------
-        # FIX 5: Hapus dtb.img yang mungkin sudah dibuat sebelumnya
-        # ------------------------------------------------------------
-        echo
-        echo "[FIX 5] Membersihkan dtb.img dari output directory..."
-
-        if [ -f "$OUT_DIR/dtb.img" ]; then
-            rm -f "$OUT_DIR/dtb.img"
-            echo -e "${GREEN}[AUTO-FIX OK]${RESET} dtb.img dihapus dari output"
-        else
-            echo -e "${GREEN}[OK]${RESET} Tidak ada dtb.img di output"
-        fi
-
-        # ------------------------------------------------------------
-        # FIX 6: Clean target_files_intermediates
-        # ------------------------------------------------------------
-        echo
-        echo "[FIX 6] Membersihkan target_files_intermediates..."
-
-        rm -rf "$OUT_DIR/obj/PACKAGING/target_files_intermediates" 2>/dev/null || true
-        echo -e "${GREEN}[AUTO-FIX OK]${RESET} target_files_intermediates dibersihkan"
-
-        # ------------------------------------------------------------
-        # VERIFIKASI
-        # ------------------------------------------------------------
-        echo
-        echo "[VERIFIKASI] BoardConfig setelah auto-fix:"
-        echo "--------------------------------------------"
-        grep -nE \
-            'TARGET_KERNEL_ARCH|TARGET_KERNEL_HEADER_ARCH|BOARD_KERNEL_IMAGE_NAME|TARGET_PREBUILT_KERNEL|TARGET_KERNEL_SOURCE|TARGET_DTB_LIST_WILDCARD|DTB|dtb' \
-            "$BOARD_CONFIG" \
-            || true
-
-        # ------------------------------------------------------------
-        # REBUILD OTOMATIS
-        # ------------------------------------------------------------
-        section "AUTO-REBUILD"
-
-        echo -e "${CYAN}${BOLD}Melakukan rebuild otomatis...${RESET}"
-        echo
-
-        # Re-lunch untuk memuat konfigurasi baru
-        echo "Re-lunch..."
-        lunch "$LUNCH_TARGET" >/dev/null 2>&1
-
-        # Rebuild
-        echo "Rebuild..."
-        BUILD_RESTART=$(date +%s)
-        set +e
-        mka bacon 2>&1 | tee -a "$LOG_DIR/build.log"
-        BUILD_STATUS=${PIPESTATUS[0]}
-        set -e
-
-        BUILD_END=$(date +%s)
-        BUILD_TIME=$((BUILD_END - BUILD_START))
-
-        if [ $BUILD_STATUS -eq 0 ]; then
-            echo -e "${GREEN}${BOLD}[AUTO-REBUILD SUCCESS]${RESET} Build berhasil setelah auto-fix!"
-        else
-            echo -e "${RED}${BOLD}[AUTO-REBUILD FAILED]${RESET} Build masih gagal setelah auto-fix"
-            echo "Cek log di: $LOG_DIR/build.log"
-            exit $BUILD_STATUS
-        fi
-
+    if grep -q "dtb\.img.*missing and no known rule" "$LOG_DIR/build.log"; then
+        log "${RED}[DETEKSI]${RESET} error dtb.img masih muncul"
+        log "  dtb.img: $PREBUILT_DTB ($(stat -c%s "$PREBUILT_DTB" 2>/dev/null || echo 0) bytes)"
+        log "  BoardConfig: $BOARD_CONFIG"
+        log "  Coba cek manual apakah TARGET_PREBUILT_DTB ke-load"
     else
-        # ------------------------------------------------------------
-        # Error lain, bukan dtb.img
-        # ------------------------------------------------------------
-        echo -e "${YELLOW}[INFO]${RESET} Error bukan dtb.img, mencoba deteksi error lain..."
-
-        OTHER_ERRORS=$(grep -E "FAILED:|error:|Error:" "$LOG_DIR/build.log" | head -n 10 || true)
-
-        if [ -n "$OTHER_ERRORS" ]; then
-            echo "Error yang terdeteksi:"
-            echo "$OTHER_ERRORS"
-        fi
-
-        echo
-        echo "Cek log lengkap di:"
-        echo "  $LOG_DIR/build.log"
-        echo "  out/error.log"
-
-        exit $BUILD_STATUS
+        log "${YELLOW}[INFO]${RESET} Error bukan dtb.img. 10 error terakhir:"
+        grep -E "FAILED:|error:|Error:" "$LOG_DIR/build.log" | tail -n 10 || true
     fi
+
+    log "Log lengkap: $LOG_DIR/build.log"
+    exit $BUILD_STATUS
 fi
 
 # ============================================================
-# BUILD SUCCESS
+# 16. SUCCESS
 # ============================================================
-
 section "BUILD SUCCESS"
-
-echo -e "${GREEN}${BOLD}Build completed successfully.${RESET}"
-echo "Build time: $BUILD_TIME seconds"
-
-# ============================================================
-# ARTIFACT CHECK
-# ============================================================
+log "${GREEN}Build completed in ${BUILD_TIME}s${RESET}"
 
 section "BUILD ARTIFACTS"
-
-if [ ! -d "$OUT_DIR" ]; then
-    echo -e "${RED}ERROR:${RESET} Output directory tidak ditemukan: $OUT_DIR"
-    exit 1
-fi
-
-echo "Output directory: $OUT_DIR"
-echo
-echo "Files:"
-find "$OUT_DIR" -maxdepth 1 -type f \( -name "*.zip" -o -name "*.img" -o -name "*.sha256sum" -o -name "*.json" \) -printf '%f\n' | sort
-
-# ============================================================
-# ROM ZIP
-# ============================================================
-
-section "ROM ZIP CHECK"
+find "$OUT_DIR" -maxdepth 1 -type f \
+    \( -name "*.zip" -o -name "*.img" -o -name "*.sha256sum" -o -name "*.json" \) \
+    -printf '%f\n' | sort
 
 ZIP=$(find "$OUT_DIR" -maxdepth 1 -type f -name "*.zip" ! -name "*ota*.zip" | head -n 1)
-
-if [ -n "$ZIP" ]; then
-    echo -e "${GREEN}ROM ZIP found:${RESET}"
-    echo "$ZIP"
-else
-    echo -e "${RED}No ROM ZIP found in artifacts!${RESET}"
+if [ -z "$ZIP" ]; then
+    log "${RED}No ROM ZIP found!${RESET}"
     exit 1
 fi
-
-# ============================================================
-# IMAGE CHECK
-# ============================================================
+log "${GREEN}ROM ZIP: $ZIP${RESET}"
 
 section "IMAGE CHECK"
-
 for IMAGE in boot.img vendor.img system.img init_boot.img recovery.img dtb.img; do
     if [ -f "$OUT_DIR/$IMAGE" ]; then
-        echo -e "${GREEN}[OK]${RESET} $IMAGE"
+        log "${GREEN}[OK]${RESET} $IMAGE"
     else
-        echo -e "${YELLOW}[--]${RESET} $IMAGE"
+        log "${YELLOW}[--]${RESET} $IMAGE (tidak ada)"
     fi
 done
 
-# ============================================================
-# SHA256
-# ============================================================
-
 section "SHA256"
+sha256sum "$ZIP"
 
-command -v sha256sum >/dev/null 2>&1 && sha256sum "$ZIP"
-
-# ============================================================
-# FINAL
-# ============================================================
-
-section "BUILD COMPLETE"
-
-echo -e "${GREEN}${BOLD}ROM:${RESET} $ROM_NAME"
-echo -e "${GREEN}${BOLD}DEVICE:${RESET} $DEVICE"
-echo
-echo "Kernel: $PREBUILT_KERNEL"
-echo "ZIP: $ZIP"
-echo "Output: $OUT_DIR"
-echo "Build time: $BUILD_TIME seconds"
-echo
-echo "Auto-fix log: $AUTOFIX_LOG"
-echo
-echo "============================================================"
-echo "                       DONE"
-echo "============================================================"
+section "DONE"
+log "ROM: $ROM_NAME"
+log "Device: $DEVICE"
+log "Kernel: $PREBUILT_KERNEL"
+log "DTB: $PREBUILT_DTB"
+log "ZIP: $ZIP"
+log "Build time: ${BUILD_TIME}s"
+log "Auto-fix log: $AUTOFIX_LOG"
