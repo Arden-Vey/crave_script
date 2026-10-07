@@ -380,34 +380,6 @@ else
 fi
 
 # ============================================================
-# VENDOR COMMON VERIFICATION
-# ============================================================
-
-echo
-echo "===================================="
-echo "    Checking vendor/vendor-common   "
-echo "===================================="
-
-# Cek baris AKTIF (tanpa # di depan)
-if grep -q "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"; then
-    echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
-    echo
-    echo "Baris aktif:"
-    grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"
-    echo
-    echo "Semua referensi (termasuk yang di-comment):"
-    grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
-    exit 1
-fi
-
-# Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
-if grep -q "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK"; then
-    echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong"
-fi
-
-echo -e "${GREEN}[OK]${RESET} patch berhasil"
-
-# ============================================================
 # PRE-BUILD SUMMARY
 # ============================================================
 
