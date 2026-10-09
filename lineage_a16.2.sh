@@ -110,15 +110,13 @@ repo init \
 echo -e "${GREEN}repo init completed.${RESET}"
 
 # ============================================================
-# LOCAL MANIFEST (CLONE MANIFEST LU)
+# LOCAL MANIFEST
 # ============================================================
 
 echo
 echo "========================"
 echo "   cloning manifest"
 echo "========================"
-
-mkdir -p .repo/local_manifests
 
 git clone \
     -b "$MANIFEST_BRANCH" \
@@ -129,31 +127,7 @@ git clone \
 echo -e "${GREEN}Local manifest cloned.${RESET}"
 
 # ============================================================
-# VERIFIKASI MANIFEST
-# ============================================================
-
-echo
-echo "============================================="
-echo "       verifying local manifest"
-echo "============================================="
-
-if [ ! -f ".repo/local_manifests/tissot.xml" ]; then
-    echo -e "${RED}[ERROR]${RESET} tissot.xml tidak ditemukan di .repo/local_manifests/"
-    echo
-    echo "Isi folder:"
-    ls -la .repo/local_manifests/
-    exit 1
-fi
-
-echo -e "${GREEN}[OK]${RESET} tissot.xml ditemukan"
-echo
-echo "Preview manifest:"
-echo "--------------------------------------------"
-grep -E "<project|<remove-project" .repo/local_manifests/tissot.xml || true
-echo "--------------------------------------------"
-
-# ============================================================
-# REPO SYNC (MANUAL, TANPA resync.sh)
+# CRAVE SYNC
 # ============================================================
 
 echo
@@ -161,38 +135,9 @@ echo "==================="
 echo "     repo sync"
 echo "==================="
 
-repo sync \
-    -c \
-    --force-sync \
-    --no-clone-bundle \
-    --no-tags \
-    -j$(nproc --all)
+/opt/crave/resync.sh
 
 echo -e "${GREEN}Repository sync completed.${RESET}"
-
-# ============================================================
-# VERIFIKASI DEVICE TREE & KERNEL
-# ============================================================
-
-echo
-echo "============================================="
-echo "     verifying device tree & kernel"
-echo "============================================="
-
-if [ -d "device/xiaomi/mi89xx-mainline" ]; then
-    echo -e "${GREEN}[OK]${RESET} device/xiaomi/mi89xx-mainline"
-else
-    echo -e "${RED}[ERROR]${RESET} device/xiaomi/mi89xx-mainline TIDAK ADA"
-    echo "Cek .repo/local_manifests/tissot.xml — path device tree-nya."
-    exit 1
-fi
-
-if [ -d "kernel/mainline/msm8953-mainline" ] || [ -d "kernel/xiaomi/msm8953-mainline" ]; then
-    echo -e "${GREEN}[OK]${RESET} kernel mainline ditemukan"
-else
-    echo -e "${YELLOW}[WARNING]${RESET} kernel mainline tidak ditemukan di path umum"
-    echo "Cek manifest lu, path kernel-nya mungkin beda."
-fi
 
 # ============================================================
 # BUILD ENVIRONMENT
@@ -243,13 +188,27 @@ echo "============================================="
 
 if [ -f "$DEVICE_MK" ]; then
 
+    # ------------------------------------------------------------
+    # 1. Backup file asli
+    # ------------------------------------------------------------
     cp "$DEVICE_MK" "$DEVICE_MK.bak"
     echo "Backup: $DEVICE_MK.bak"
 
+    # ------------------------------------------------------------
+    # 2. Comment SEMUA baris yang mengandung vendor/xiaomi/msm8953-common
+    #    (termasuk yang di dalam blok PRODUCT_COPY_FILES)
+    # ------------------------------------------------------------
     sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
 
+    # ------------------------------------------------------------
+    # 3. Comment juga baris "PRODUCT_COPY_FILES += \" yang diikuti
+    #    baris comment vendor/xiaomi/msm8953-common
+    # ------------------------------------------------------------
     sed -i '/^PRODUCT_COPY_FILES += \\$/{N;/^# .*vendor\/xiaomi\/msm8953-common/s/^/# /}' "$DEVICE_MK"
 
+    # ------------------------------------------------------------
+    # 4. Verifikasi: cek baris AKTIF (tanpa # di depan)
+    # ------------------------------------------------------------
     ACTIVE_REFS=$(grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK" || true)
 
     if [ -n "$ACTIVE_REFS" ]; then
@@ -269,6 +228,9 @@ if [ -f "$DEVICE_MK" ]; then
         echo -e "${GREEN}[OK]${RESET} verifikasi: tidak ada vendor blobs aktif"
     fi
 
+    # ------------------------------------------------------------
+    # 5. Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
+    # ------------------------------------------------------------
     EMPTY_COPY=$(grep -n "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK" || true)
 
     if [ -n "$EMPTY_COPY" ]; then
@@ -295,12 +257,16 @@ echo "       checking product properties"
 echo "============================================="
 
 if [ -f "$PROP_FILE" ]; then
+
     echo "Found:"
     echo "$PROP_FILE"
+
 else
+
     echo -e "${YELLOW}WARNING:${RESET}"
     echo "$PROP_FILE tidak ditemukan."
     echo "Skipping property modification."
+
 fi
 
 # ============================================================
@@ -356,10 +322,9 @@ echo "============================================="
 
 if [ -d "kernel/mainline/msm8953-mainline" ]; then
     echo -e "${GREEN}[OK]${RESET} kernel/mainline/msm8953-mainline"
-elif [ -d "kernel/xiaomi/msm8953-mainline" ]; then
-    echo -e "${GREEN}[OK]${RESET} kernel/xiaomi/msm8953-mainline"
 else
-    echo -e "${YELLOW}[WARNING]${RESET} kernel mainline tidak ditemukan"
+    echo -e "${RED}[ERROR]${RESET} kernel/mainline/msm8953-mainline"
+    exit 1
 fi
 
 # ============================================================
@@ -415,6 +380,34 @@ else
 fi
 
 # ============================================================
+# VENDOR COMMON VERIFICATION
+# ============================================================
+
+echo
+echo "===================================="
+echo "    Checking vendor/vendor-common   "
+echo "===================================="
+
+# Cek baris AKTIF (tanpa # di depan)
+if grep -q "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"; then
+    echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
+    echo
+    echo "Baris aktif:"
+    grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"
+    echo
+    echo "Semua referensi (termasuk yang di-comment):"
+    grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
+    exit 1
+fi
+
+# Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
+if grep -q "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK"; then
+    echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong"
+fi
+
+echo -e "${GREEN}[OK]${RESET} patch berhasil"
+
+# ============================================================
 # PRE-BUILD SUMMARY
 # ============================================================
 
@@ -447,7 +440,7 @@ echo
 BUILD_START=$(date +%s)
 
 # ============================================================
-# BUILD
+# BUILD (TANPA set -e AGAR SCRIPT TIDAK BERHENTI DI ERROR)
 # ============================================================
 
 set +e
@@ -515,10 +508,12 @@ echo "                  BUILD ARTIFACTS"
 echo "============================================================"
 
 if [ ! -d "$OUT_DIR" ]; then
+
     echo -e "${RED}ERROR:${RESET}"
     echo "Output directory tidak ditemukan:"
     echo "$OUT_DIR"
     exit 1
+
 fi
 
 echo
@@ -586,11 +581,13 @@ for IMAGE in \
     init_boot.img \
     recovery.img
 do
+
     if [ -f "$OUT_DIR/$IMAGE" ]; then
         echo -e "${GREEN}[OK]${RESET} $IMAGE"
     else
         echo -e "${YELLOW}[--]${RESET} $IMAGE"
     fi
+
 done
 
 # ============================================================
@@ -603,7 +600,9 @@ echo "                    SHA256"
 echo "============================================================"
 
 if command -v sha256sum >/dev/null 2>&1; then
+
     sha256sum "$ZIP"
+
 fi
 
 # ============================================================
