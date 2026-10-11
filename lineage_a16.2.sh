@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # ============================================================
-# COLORS
+# AUTO-FIX BUILD SCRIPT
+# LineageOS 23.2 - tissot_mainline
+# Urutan: init -> clone -> sync -> fix -> lunch -> build
 # ============================================================
 
 RED='\033[0;31m'
@@ -32,6 +34,27 @@ BUILD_HOSTNAME="crave"
 OUT_DIR="out/target/product/$DEVICE"
 
 DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
+BOARD_CONFIG="device/xiaomi/mi89xx-mainline/tissot_mainline/BoardConfig.mk"
+LINEAGE_COMPAT_BP="hardware/lineage/compat/Android.bp"
+LIBJXL_BP="external/libjxl/Android.bp"
+
+MAX_RETRY=8
+LOG_FILE="/tmp/tissot_build.log"
+
+# ============================================================
+# HELPER
+# ============================================================
+
+info()    { echo -e "${BLUE}[INFO]${RESET} $*"; }
+ok()      { echo -e "${GREEN}[OK]${RESET} $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${RESET} $*"; }
+fail()    { echo -e "${RED}[FAIL]${RESET} $*"; }
+section() {
+    echo
+    echo "============================================================"
+    echo "  $*"
+    echo "============================================================"
+}
 
 # ============================================================
 # BANNER
@@ -39,7 +62,6 @@ DEVICE_MK="device/xiaomi/mi89xx-mainline/tissot_mainline/device.mk"
 
 banner() {
     clear
-
     echo -e "${CYAN}${BOLD}"
     echo "╔═════════════════════════════════════════════════════════════════╗"
     echo "║                                                                 ║"
@@ -51,7 +73,7 @@ banner() {
     echo "║      ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝     ║"
     echo "║                                                                 ║"
     echo "║                  T I S S O T   M A I N L I N E                  ║"
-    echo "║                Automated Release Builder                        ║"
+    echo "║              Automated Release Builder + Auto-Fix               ║"
     echo "║                                                                 ║"
     echo "╠═════════════════════════════════════════════════════════════════╣"
     echo "║  ROM        : LineageOS 23.2                                    ║"
@@ -62,11 +84,260 @@ banner() {
     echo -e "${RESET}"
 }
 
-banner
+# ============================================================
+# AUTO-FIX FUNCTIONS
+# ============================================================
+
+fix_duplicate_protobuf() {
+    section "AUTO-FIX: Duplicate protobuf modules"
+
+    local target="$LINEAGE_COMPAT_BP"
+    [ -f "$target" ] || { warn "$target tidak ada, skip"; return 1; }
+
+    if grep -q "DISABLED_BY_AUTOFIX" "$target"; then
+        ok "Sudah pernah dipatch, skip"
+        return 0
+    fi
+
+    cp "$target" "$target.bak"
+
+    python3 - "$target" <<'PYEOF'
+import re, sys
+path = sys.argv[1]
+content = open(path).read()
+
+targets = [
+    'prebuilt_libprotobuf-cpp-full-3.9.1-vendorcompat',
+    'prebuilt_libprotobuf-cpp-lite-3.9.1-vendorcompat',
+    'prebuilt_libprotobuf-cpp-full-21.12-vendorcompat',
+    'prebuilt_libprotobuf-cpp-lite-21.12-vendorcompat',
+]
+
+pattern = re.compile(
+    r'cc_prebuilt_library_shared\s*\{[^}]*?name:\s*"([^"]+)"[^}]*?\}',
+    re.DOTALL
+)
+
+def repl(m):
+    if m.group(1) in targets:
+        return '\n'.join(
+            ('// DISABLED_BY_AUTOFIX: ' + ln) if ln.strip() else ln
+            for ln in m.group(0).split('\n')
+        )
+    return m.group(0)
+
+new = pattern.sub(repl, content)
+open(path, 'w').write(new)
+print("OK")
+PYEOF
+
+    if grep -qE '^\s*name:\s*"prebuilt_libprotobuf-cpp-(full|lite)-(3\.9\.1|21\.12)-vendorcompat"' "$target"; then
+        fail "Masih ada yang aktif, restore"
+        mv "$target.bak" "$target"
+        return 1
+    fi
+
+    ok "Modul protobuf duplikat di-disable"
+    return 0
+}
+
+fix_dtb_config() {
+    section "AUTO-FIX: BOARD_INCLUDE_DTB_IN_BOOTIMG"
+
+    [ -f "$BOARD_CONFIG" ] || { warn "$BOARD_CONFIG tidak ada"; return 1; }
+
+    if ! grep -q "BOARD_PREBUILT_DTBIMAGE_DIR" "$BOARD_CONFIG"; then
+        ok "Tidak pakai BOARD_PREBUILT_DTBIMAGE_DIR"
+        return 0
+    fi
+
+    if grep -qE "BOARD_INCLUDE_DTB_IN_BOOTIMG\s*:=\s*true" "$BOARD_CONFIG"; then
+        ok "Sudah true"
+        return 0
+    fi
+
+    cp "$BOARD_CONFIG" "$BOARD_CONFIG.bak"
+    {
+        echo ""
+        echo "# Added by AutoFix"
+        echo "BOARD_INCLUDE_DTB_IN_BOOTIMG := true"
+    } >> "$BOARD_CONFIG"
+
+    ok "Ditambahkan BOARD_INCLUDE_DTB_IN_BOOTIMG := true"
+    return 0
+}
+
+fix_libjxl() {
+    section "AUTO-FIX: libjxl sdk_version"
+
+    [ -f "$LIBJXL_BP" ] || { warn "$LIBJXL_BP tidak ada"; return 1; }
+
+    if grep -q 'sdk_version: "none"' "$LIBJXL_BP"; then
+        sed -i 's/sdk_version: "none"/sdk_version: "current"/' "$LIBJXL_BP"
+        ok "sdk_version diubah ke current"
+        return 0
+    fi
+    ok "Tidak perlu diubah"
+    return 1
+}
+
+fix_vendor_blobs() {
+    section "AUTO-FIX: vendor/xiaomi/msm8953-common"
+
+    [ -f "$DEVICE_MK" ] || { warn "$DEVICE_MK tidak ada"; return 1; }
+
+    local active
+    active=$(grep -c "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK" || true)
+
+    if [ "$active" -eq 0 ]; then
+        ok "Tidak ada referensi aktif"
+        return 0
+    fi
+
+    cp "$DEVICE_MK" "$DEVICE_MK.bak"
+    sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
+
+    active=$(grep -c "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK" || true)
+    if [ "$active" -eq 0 ]; then
+        ok "Semua referensi di-comment"
+    else
+        warn "Masih ada $active referensi aktif"
+    fi
+    return 0
+}
+
+fix_empty_copy_files() {
+    section "AUTO-FIX: PRODUCT_COPY_FILES += \\ kosong"
+
+    [ -f "$DEVICE_MK" ] || { warn "$DEVICE_MK tidak ada"; return 1; }
+
+    if ! grep -qE '^PRODUCT_COPY_FILES \+= \\$' "$DEVICE_MK"; then
+        ok "Tidak ada PRODUCT_COPY_FILES kosong"
+        return 1
+    fi
+
+    cp "$DEVICE_MK" "$DEVICE_MK.bak"
+
+    python3 - "$DEVICE_MK" <<'PYEOF'
+import re, sys
+path = sys.argv[1]
+lines = open(path).read().split('\n')
+out = []
+i = 0
+while i < len(lines):
+    line = lines[i]
+    if re.match(r'^PRODUCT_COPY_FILES \+= \\\s*$', line):
+        nxt = lines[i+1] if i+1 < len(lines) else ''
+        if not nxt.strip() or nxt.strip().startswith('#'):
+            i += 1
+            continue
+    out.append(line)
+    i += 1
+open(path, 'w').write('\n'.join(out))
+print("OK")
+PYEOF
+
+    ok "Baris kosong dibersihkan"
+    return 0
+}
+
+fix_clean_soong() {
+    section "AUTO-FIX: Bersihkan out/soong"
+
+    if grep -q "dumpvars failed\|panic:" "$LOG_FILE" 2>/dev/null; then
+        warn "Soong panic terdeteksi, bersihkan out/soong..."
+        rm -rf out/soong out/.module_paths out/.lock 2>/dev/null
+        ok "out/soong dibersihkan"
+        return 0
+    fi
+    ok "Tidak perlu dibersihkan"
+    return 1
+}
+
+fix_soong_duplicate_generic() {
+    section "AUTO-FIX: Duplicate module (generic)"
+
+    local dup_modules
+    dup_modules=$(grep -oE 'module "[^"]+" already defined' "$LOG_FILE" 2>/dev/null \
+        | sed 's/module "//;s/" already defined//' | sort -u || true)
+
+    [ -z "$dup_modules" ] && { ok "Tidak ada module duplikat"; return 1; }
+
+    local fixed=0
+    while IFS= read -r mod; do
+        [ -z "$mod" ] && continue
+        warn "Module duplikat: $mod"
+
+        local files
+        files=$(grep -rl "name: \"$mod\"" --include="Android.bp" . 2>/dev/null \
+            | grep -v "^./out/" || true)
+
+        local count
+        count=$(echo "$files" | grep -c . || true)
+
+        if [ "$count" -gt 1 ]; then
+            local idx=0
+            while IFS= read -r f; do
+                [ -z "$f" ] && continue
+                idx=$((idx+1))
+                [ $idx -eq 1 ] && continue
+
+                python3 - "$f" "$mod" <<'PYEOF'
+import re, sys
+path, mod = sys.argv[1], sys.argv[2]
+content = open(path).read()
+
+pattern = re.compile(
+    r'((?:cc_prebuilt_library_shared|cc_library_shared|cc_library|cc_prebuilt_library_static|'
+    r'cc_library_static|cc_binary|cc_prebuilt_binary|java_library|android_app|'
+    r'android_app_import|sh_binary|phony|cc_defaults|cc_library_headers)\s*\{[^}]*?name:\s*"'
+    + re.escape(mod) + r'"[^}]*?\})',
+    re.DOTALL
+)
+
+def repl(m):
+    return '\n'.join(
+        ('// DISABLED_BY_AUTOFIX: ' + ln) if ln.strip() else ln
+        for ln in m.group(1).split('\n')
+    )
+
+new = pattern.sub(repl, content)
+open(path, 'w').write(new)
+PYEOF
+                ok "Disabled '$mod' di $f"
+                fixed=1
+            done <<< "$files"
+        fi
+    done <<< "$dup_modules"
+
+    [ "$fixed" -eq 1 ] && return 0
+    return 1
+}
 
 # ============================================================
-# BUILD INFO
+# RUN ALL FIXES
 # ============================================================
+
+run_all_fixes() {
+    local fixed_any=0
+
+    fix_duplicate_protobuf      && fixed_any=1
+    fix_dtb_config              && fixed_any=1
+    fix_libjxl                  && fixed_any=1
+    fix_vendor_blobs            && fixed_any=1
+    fix_empty_copy_files        && fixed_any=1
+    fix_clean_soong             && fixed_any=1
+    fix_soong_duplicate_generic && fixed_any=1
+
+    [ "$fixed_any" -eq 1 ] && return 0
+    return 1
+}
+
+# ============================================================
+# PHASE 1: INIT
+# ============================================================
+
+banner
 
 echo
 echo -e "${BLUE}${BOLD}Build configuration${RESET}"
@@ -81,562 +352,169 @@ echo "Manifest branch : $MANIFEST_BRANCH"
 echo "Output          : $OUT_DIR"
 echo
 
-# ============================================================
-# CLEAN LOCAL MANIFEST
-# ============================================================
-
-echo
-echo "============================================="
-echo "    cleaning up previous local manifests"
-echo "============================================="
-
+# --- Clean local manifest ---
+section "1. Clean local manifests"
 rm -rf .repo/local_manifests
+ok "Local manifests cleaned"
 
-echo -e "${GREEN}Local manifests cleaned.${RESET}"
-
-# ============================================================
-# REPO INIT
-# ============================================================
-
-echo
-echo "====================="
-echo "      repo init"
-echo "====================="
-
+# --- Repo init ---
+section "2. Repo init"
 repo init \
     -u https://github.com/LineageOS/android.git \
     -b "$ROM_BRANCH" \
     --depth=1 \
     --git-lfs
+ok "repo init done"
 
-echo -e "${GREEN}repo init completed.${RESET}"
-
-# ============================================================
-# LOCAL MANIFEST
-# ============================================================
-
-echo
-echo "========================"
-echo "   cloning manifest"
-echo "========================"
-
+# --- Clone manifest ---
+section "3. Clone local manifest"
 git clone \
     -b "$MANIFEST_BRANCH" \
     --depth=1 \
     "$MANIFEST_URL" \
     .repo/local_manifests
+ok "Local manifest cloned"
 
-echo -e "${GREEN}Local manifest cloned.${RESET}"
-
-# ============================================================
-# CRAVE SYNC
-# ============================================================
-
-echo
-echo "==================="
-echo "     repo sync"
-echo "==================="
-
-/opt/crave/resync.sh
-
-echo -e "${GREEN}Repository sync completed.${RESET}"
+# --- Sync ---
+section "4. Repo sync"
+if [ -x /opt/crave/resync.sh ]; then
+    /opt/crave/resync.sh
+else
+    repo sync -c -j"$(nproc --all)" --force-sync --no-clone-bundle --no-tags
+fi
+ok "Sync done"
 
 # ============================================================
-# BUILD ENVIRONMENT
+# PHASE 2: ENV
 # ============================================================
 
-echo
-echo "=============================="
-echo "   build environment setup"
-echo "=============================="
-
+section "5. Build environment"
 export BUILD_USERNAME="$BUILD_USERNAME"
 export BUILD_HOSTNAME="$BUILD_HOSTNAME"
-
 export TARGET_RELEASE="$TARGET_RELEASE_VALUE"
-
 export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
 export ALLOW_MISSING_DEPENDENCIES=true
-
 export LC_ALL=C
-
-echo "BUILD_USERNAME=$BUILD_USERNAME"
-echo "BUILD_HOSTNAME=$BUILD_HOSTNAME"
-echo "BUILD_BROKEN_MISSING_REQUIRED_MODULES=$BUILD_BROKEN_MISSING_REQUIRED_MODULES"
-echo "ALLOW_MISSING_DEPENDENCIES=$ALLOW_MISSING_DEPENDENCIES"
+ok "Environment set"
 
 # ============================================================
-# PATCH LIBJXL (FIX SDK_VERSION)
+# PHASE 3: FIX (SETELAH SYNC, SEBELUM LUNCH)
 # ============================================================
 
-echo
-echo "============================================="
-echo "       patching external/libjxl"
-echo "============================================="
+section "6. AUTO-FIX PRE-BUILD"
+info "Menjalankan semua fix yang diperlukan sebelum build..."
 
-if [ -f "external/libjxl/Android.bp" ]; then
-    sed -i 's/sdk_version: "none"/sdk_version: "current"/' external/libjxl/Android.bp
-    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp dipatch"
-else
-    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp tidak ditemukan"
-fi
+fix_duplicate_protobuf
+fix_dtb_config
+fix_libjxl
+fix_vendor_blobs
+fix_empty_copy_files
 
-# ============================================================
-# PATCH: HAPUS VENDOR FIRMWARE BLOBS UNTUK MAINLINE
-# ============================================================
-
-echo
-echo "============================================="
-echo "   patching tissot_mainline/device.mk"
-echo "============================================="
-
-if [ -f "$DEVICE_MK" ]; then
-
-    # ------------------------------------------------------------
-    # 1. Backup file asli
-    # ------------------------------------------------------------
-    cp "$DEVICE_MK" "$DEVICE_MK.bak"
-    echo "Backup: $DEVICE_MK.bak"
-
-    # ------------------------------------------------------------
-    # 2. Comment SEMUA baris yang mengandung vendor/xiaomi/msm8953-common
-    #    (termasuk yang di dalam blok PRODUCT_COPY_FILES)
-    # ------------------------------------------------------------
-    sed -i 's|^\(.*vendor/xiaomi/msm8953-common.*\)$|# \1|' "$DEVICE_MK"
-
-    # ------------------------------------------------------------
-    # 3. Comment juga baris "PRODUCT_COPY_FILES += \" yang diikuti
-    #    baris comment vendor/xiaomi/msm8953-common
-    # ------------------------------------------------------------
-    sed -i '/^PRODUCT_COPY_FILES += \\$/{N;/^# .*vendor\/xiaomi\/msm8953-common/s/^/# /}' "$DEVICE_MK"
-
-    # ------------------------------------------------------------
-    # 4. Verifikasi: cek baris AKTIF (tanpa # di depan)
-    # ------------------------------------------------------------
-    ACTIVE_REFS=$(grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK" || true)
-
-    if [ -n "$ACTIVE_REFS" ]; then
-        echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
-        echo
-        echo "Baris aktif:"
-        echo "$ACTIVE_REFS"
-        echo
-        echo "Semua referensi (termasuk yang di-comment):"
-        grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
-        echo
-        echo "Restore dari backup..."
-        mv "$DEVICE_MK.bak" "$DEVICE_MK"
-        exit 1
-    else
-        echo -e "${GREEN}[OK]${RESET} vendor blobs di-comment di $DEVICE_MK"
-        echo -e "${GREEN}[OK]${RESET} verifikasi: tidak ada vendor blobs aktif"
-    fi
-
-    # ------------------------------------------------------------
-    # 5. Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
-    # ------------------------------------------------------------
-    EMPTY_COPY=$(grep -n "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK" || true)
-
-    if [ -n "$EMPTY_COPY" ]; then
-        echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong:"
-        echo "$EMPTY_COPY"
-        echo "Ini mungkin bikin error Makefile. Cek manual:"
-        echo "  $DEVICE_MK"
-    fi
-
-else
-    echo -e "${RED}[ERROR]${RESET} $DEVICE_MK tidak ditemukan"
-    exit 1
-fi
+ok "Pre-build fix selesai"
 
 # ============================================================
-# OPTIONAL DEVICE PROP
+# PHASE 4: SOURCE ENVSETUP
 # ============================================================
 
-PROP_FILE="device/xiaomi/mi89xx-mainline/props/product.prop"
-
-echo
-echo "============================================="
-echo "       checking product properties"
-echo "============================================="
-
-if [ -f "$PROP_FILE" ]; then
-
-    echo "Found:"
-    echo "$PROP_FILE"
-
-else
-
-    echo -e "${YELLOW}WARNING:${RESET}"
-    echo "$PROP_FILE tidak ditemukan."
-    echo "Skipping property modification."
-
-fi
-
-# ============================================================
-# BUILD ENV
-# ============================================================
-
-echo
-echo "=============================="
-echo "   loading build environment"
-echo "=============================="
-
+section "7. Source build/envsetup.sh"
 source build/envsetup.sh
-
-echo -e "${GREEN}Build environment loaded.${RESET}"
-
-# ============================================================
-# LUNCH
-# ============================================================
-
-echo
-echo "===================="
-echo "       lunch"
-echo "===================="
-
-lunch "$LUNCH_TARGET"
-
-echo -e "${GREEN}Lunch completed.${RESET}"
+ok "envsetup loaded"
 
 # ============================================================
-# DEVICE CHECK
+# PHASE 5: BUILD LOOP
 # ============================================================
 
-echo
-echo "============================================="
-echo "          checking device tree"
-echo "============================================="
-
-if [ -d "device/xiaomi/mi89xx-mainline" ]; then
-    echo -e "${GREEN}[OK]${RESET} device/xiaomi/mi89xx-mainline"
-else
-    echo -e "${RED}[ERROR]${RESET} device/xiaomi/mi89xx-mainline"
-    exit 1
-fi
-
-# ============================================================
-# KERNEL CHECK
-# ============================================================
-
-echo
-echo "============================================="
-echo "          checking mainline kernel"
-echo "============================================="
-
-if [ -d "kernel/mainline/msm8953-mainline" ]; then
-    echo -e "${GREEN}[OK]${RESET} kernel/mainline/msm8953-mainline"
-else
-    echo -e "${RED}[ERROR]${RESET} kernel/mainline/msm8953-mainline"
-    exit 1
-fi
-
-# ============================================================
-# LIBJXL DEBUG
-# ============================================================
-
-echo
-echo "============================================="
-echo "       checking external/libjxl"
-echo "============================================="
-
-if [ -f "external/libjxl/Android.bp" ]; then
-
-    echo -e "${GREEN}[OK]${RESET} external/libjxl/Android.bp"
-
-    echo
-    echo "Relevant properties:"
-    grep -nE \
-        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
-        external/libjxl/Android.bp \
-        || true
-
-else
-
-    echo -e "${YELLOW}[WARNING]${RESET} external/libjxl/Android.bp missing"
-
-fi
-
-# ============================================================
-# HIGHWAY DEBUG
-# ============================================================
-
-echo
-echo "============================================="
-echo "       checking external/highway"
-echo "============================================="
-
-if [ -f "external/highway/Android.bp" ]; then
-
-    echo -e "${GREEN}[OK]${RESET} external/highway/Android.bp"
-
-    echo
-    echo "Relevant properties:"
-    grep -nE \
-        'sdk_version|min_sdk_version|compile_multilib|apex_available|name:|libs:|shared_libs:|static_libs:' \
-        external/highway/Android.bp \
-        || true
-
-else
-
-    echo -e "${YELLOW}[WARNING]${RESET} external/highway/Android.bp missing"
-
-fi
-
-# ============================================================
-# VENDOR COMMON VERIFICATION
-# ============================================================
-
-echo
-echo "===================================="
-echo "    Checking vendor/vendor-common   "
-echo "===================================="
-
-# Cek baris AKTIF (tanpa # di depan)
-if grep -q "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"; then
-    echo -e "${RED}[ERROR]${RESET} masih ada referensi vendor blobs yang aktif!"
-    echo
-    echo "Baris aktif:"
-    grep -n "^[^#].*vendor/xiaomi/msm8953-common" "$DEVICE_MK"
-    echo
-    echo "Semua referensi (termasuk yang di-comment):"
-    grep -n "vendor/xiaomi/msm8953-common" "$DEVICE_MK"
-    exit 1
-fi
-
-# Cek apakah ada PRODUCT_COPY_FILES += \ yang kosong
-if grep -q "^PRODUCT_COPY_FILES += \\\\$" "$DEVICE_MK"; then
-    echo -e "${YELLOW}[WARNING]${RESET} ada PRODUCT_COPY_FILES += \\ yang kosong"
-fi
-
-echo -e "${GREEN}[OK]${RESET} patch berhasil"
-
-# ============================================================
-# PRE-BUILD SUMMARY
-# ============================================================
-
-echo
-echo "============================================================"
-echo "                    PRE-BUILD SUMMARY"
-echo "============================================================"
-
-echo
-echo "ROM             : $ROM_NAME"
-echo "Branch          : $ROM_BRANCH"
-echo "Device          : $DEVICE"
-echo "Lunch           : $LUNCH_TARGET"
-echo "Release         : $TARGET_RELEASE"
-echo "Build username  : $BUILD_USERNAME"
-echo "Build hostname  : $BUILD_HOSTNAME"
-echo "CPU threads     : $(nproc --all)"
-echo "Output          : $OUT_DIR"
-
-echo
-echo "============================================================"
-echo "                    STARTING BUILD"
-echo "============================================================"
-
-echo
-echo "Command:"
-echo
-echo "    mka bacon"
-echo
-
-BUILD_START=$(date +%s)
-
-# ============================================================
-# BUILD (TANPA set -e AGAR SCRIPT TIDAK BERHENTI DI ERROR)
-# ============================================================
-
-set +e
-mka bacon
-BUILD_STATUS=$?
-set -e
-
-# ============================================================
-# BUILD TIME
-# ============================================================
-
-BUILD_END=$(date +%s)
-BUILD_TIME=$((BUILD_END - BUILD_START))
-
-# ============================================================
-# CEK STATUS BUILD
-# ============================================================
-
-if [ $BUILD_STATUS -ne 0 ]; then
-
-    echo
-    echo "============================================================"
-    echo "                    BUILD FAILED"
-    echo "============================================================"
-
-    echo
-    echo -e "${RED}${BOLD}Build failed with exit status: $BUILD_STATUS${RESET}"
-
-    echo
-    echo "Build time:"
-    echo "$BUILD_TIME seconds"
-
-    echo
-    echo "Cek log di:"
-    echo "  out/error.log"
-    echo "  out/verbose.log.gz"
-
-    exit $BUILD_STATUS
-
-fi
-
-# ============================================================
-# BUILD SUCCESS
-# ============================================================
-
-echo
-echo "============================================================"
-echo "                    BUILD SUCCESS"
-echo "============================================================"
-
-echo
-echo -e "${GREEN}${BOLD}Build completed successfully.${RESET}"
-
-echo
-echo "Build time:"
-echo "$BUILD_TIME seconds"
-
-# ============================================================
-# ARTIFACT CHECK
-# ============================================================
-
-echo
-echo "============================================================"
-echo "                  BUILD ARTIFACTS"
-echo "============================================================"
-
-if [ ! -d "$OUT_DIR" ]; then
-
-    echo -e "${RED}ERROR:${RESET}"
-    echo "Output directory tidak ditemukan:"
-    echo "$OUT_DIR"
-    exit 1
-
-fi
-
-echo
-echo "Output directory:"
-echo "$OUT_DIR"
-
-echo
-echo "Files:"
-echo "--------------------------------------------"
-
-find "$OUT_DIR" \
-    -maxdepth 1 \
-    -type f \
-    \( \
-        -name "*.zip" \
-        -o -name "*.img" \
-        -o -name "*.sha256sum" \
-        -o -name "*.json" \
-    \) \
-    -printf '%f\n' \
-    | sort
-
-# ============================================================
-# ROM ZIP
-# ============================================================
-
-echo
-echo "============================================================"
-echo "                    ROM ZIP CHECK"
-echo "============================================================"
-
-ZIP=$(find "$OUT_DIR" \
-    -maxdepth 1 \
-    -type f \
-    -name "*.zip" \
-    ! -name "*ota*.zip" \
-    | head -n 1)
-
-if [ -n "$ZIP" ]; then
-
-    echo -e "${GREEN}ROM ZIP found:${RESET}"
-    echo
-    echo "$ZIP"
-
-else
-
-    echo -e "${RED}No ROM ZIP found in artifacts!${RESET}"
-    exit 1
-
-fi
-
-# ============================================================
-# IMAGE CHECK
-# ============================================================
-
-echo
-echo "============================================================"
-echo "                    IMAGE CHECK"
-echo "============================================================"
-
-for IMAGE in \
-    boot.img \
-    vendor.img \
-    system.img \
-    init_boot.img \
-    recovery.img
-do
-
-    if [ -f "$OUT_DIR/$IMAGE" ]; then
-        echo -e "${GREEN}[OK]${RESET} $IMAGE"
-    else
-        echo -e "${YELLOW}[--]${RESET} $IMAGE"
+attempt=0
+build_success=0
+
+while [ $attempt -lt $MAX_RETRY ]; do
+    attempt=$((attempt+1))
+    section "BUILD ATTEMPT #$attempt / $MAX_RETRY"
+
+    # Lunch
+    info "Running lunch..."
+    lunch "$LUNCH_TARGET" > /tmp/lunch.log 2>&1
+    LUNCH_STATUS=$?
+
+    if [ $LUNCH_STATUS -ne 0 ] || ! grep -q "lineage_tissot_mainline" /tmp/lunch.log; then
+        warn "Lunch gagal, coba auto-fix..."
+
+        cat /tmp/lunch.log >> "$LOG_FILE"
+
+        if ! run_all_fixes; then
+            fail "Tidak ada fix yang bisa diterapkan untuk lunch error"
+            echo
+            echo "Log lunch (30 baris terakhir):"
+            tail -n 30 /tmp/lunch.log
+            exit 1
+        fi
+
+        info "Re-source envsetup setelah fix..."
+        source build/envsetup.sh
+        continue
+    fi
+    ok "Lunch berhasil"
+
+    # Build
+    BUILD_START=$(date +%s)
+    set +e
+    mka bacon 2>&1 | tee "$LOG_FILE"
+    BUILD_STATUS=${PIPESTATUS[0]}
+    set -e
+    BUILD_END=$(date +%s)
+    BUILD_TIME=$((BUILD_END - BUILD_START))
+
+    if [ $BUILD_STATUS -eq 0 ]; then
+        build_success=1
+        break
     fi
 
+    fail "Build gagal (exit $BUILD_STATUS) setelah $BUILD_TIME detik"
+    echo
+    info "Error terakhir:"
+    grep -iE "error:|FAILED:" "$LOG_FILE" | tail -n 15 || true
+    echo
+    info "Coba auto-fix dan rebuild..."
+
+    if ! run_all_fixes; then
+        fail "Tidak ada fix yang bisa diterapkan"
+        echo
+        info "Log: $LOG_FILE"
+        exit $BUILD_STATUS
+    fi
+
+    info "Re-source envsetup..."
+    source build/envsetup.sh
 done
 
 # ============================================================
-# SHA256
+# HASIL
 # ============================================================
 
-echo
-echo "============================================================"
-echo "                    SHA256"
-echo "============================================================"
-
-if command -v sha256sum >/dev/null 2>&1; then
-
-    sha256sum "$ZIP"
-
+if [ $build_success -ne 1 ]; then
+    section "BUILD GAGAL setelah $MAX_RETRY percobaan"
+    info "Log: $LOG_FILE"
+    exit 1
 fi
 
-# ============================================================
-# FINAL
-# ============================================================
+section "BUILD SUCCESS"
+echo
+echo -e "${GREEN}${BOLD}Build berhasil!${RESET}"
+echo "Build time: $BUILD_TIME seconds"
+echo "Attempts  : $attempt"
+
+section "BUILD ARTIFACTS"
+[ -d "$OUT_DIR" ] && find "$OUT_DIR" -maxdepth 1 -type f \
+    \( -name "*.zip" -o -name "*.img" -o -name "*.sha256sum" -o -name "*.json" \) \
+    -printf '%f\n' | sort
+
+ZIP=$(find "$OUT_DIR" -maxdepth 1 -type f -name "*.zip" ! -name "*ota*.zip" | head -n 1)
+if [ -n "$ZIP" ]; then
+    echo
+    ok "ROM ZIP: $ZIP"
+    echo
+    sha256sum "$ZIP"
+fi
 
 echo
-echo "============================================================"
-echo "                  BUILD COMPLETE"
-echo "============================================================"
-
-echo
-echo -e "${GREEN}${BOLD}ROM:${RESET} $ROM_NAME"
-echo -e "${GREEN}${BOLD}DEVICE:${RESET} $DEVICE"
-
-echo
-echo "ZIP:"
-echo "$ZIP"
-
-echo
-echo "Output:"
-echo "$OUT_DIR"
-
-echo
-echo "Build time:"
-echo "$BUILD_TIME seconds"
-
-echo
-echo "============================================================"
-echo "                       DONE"
-echo "============================================================"
-echo
+section "DONE"
