@@ -3,7 +3,7 @@ set -e
 
 # ============================================================
 # LINEAGEOS 23.2 - GENERIC ARM64 BUILDER
-# WITH AUTO-DETECT & AUTO-FIX DUPLICATE MODULES
+# WITH AUTO-DETECT & AUTO-FIX DUPLICATE MODULES (ENHANCED)
 # ============================================================
 
 RED='\033[0;31m'
@@ -29,6 +29,9 @@ BUILD_HOSTNAME="crave"
 OUT_DIR="out/target/product/$DEVICE"
 
 GENERIC_INIT_VISIBILITY="//device/mainline/generic/services/generic_init"
+
+# Path nested yang sering jadi sumber konflik mesa vulkan
+SUSPECT_MESA_NESTED="external/mesa/android/android"
 
 # Folder yang akan discan untuk duplikat (HANYA yang relevan)
 DEDUP_SCAN_DIRS=(
@@ -97,8 +100,117 @@ disable_file() {
 }
 
 # ------------------------------------------------------------
+# Fix 1: Mesa vulkan di nested path (android/android/so)
+# ------------------------------------------------------------
+fix_mesa_nested_path() {
+    local nested="$SUSPECT_MESA_NESTED"
+
+    if [ ! -d "$nested" ]; then
+        return 0
+    fi
+
+    warn "Direktori nested mencurigakan: $nested"
+    ls -la "$nested" 2>/dev/null | sed 's/^/    /' || true
+
+    local found=0
+    while IFS= read -r f; do
+        if grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$f" 2>/dev/null \
+        || grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$f" 2>/dev/null; then
+            disable_file "$f" "vulkan duplikat di nested path $nested"
+            found=1
+        fi
+    done < <(find "$nested" -type f \( -name "Android.mk" -o -name "Android.bp" \) 2>/dev/null)
+
+    return 0
+}
+
+# ------------------------------------------------------------
+# Fix 2: Scan vendor / device overlay tree (warning only)
+# ------------------------------------------------------------
+fix_overlay_conflict() {
+    local base_dirs=(
+        "external/mesa"
+        "hardware/interfaces"
+        "system/core"
+    )
+    local overlay_dirs=(
+        "vendor"
+        "device"
+    )
+
+    # Kumpulkan module dari AOSP base
+    declare -A base_modules
+    for d in "${base_dirs[@]}"; do
+        [ -d "$d" ] || continue
+        while IFS= read -r f; do
+            while IFS= read -r mod; do
+                [ -z "$mod" ] && continue
+                base_modules["$mod"]="$f"
+            done < <(grep -hoE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*[^ ]+' "$f" 2>/dev/null \
+                | awk '{print $NF}' | tr -d '"' | sort -u || true)
+        done < <(find "$d" -type f -name "Android.mk" 2>/dev/null)
+    done
+
+    # Cek overlay
+    for od in "${overlay_dirs[@]}"; do
+        [ -d "$od" ] || continue
+        while IFS= read -r f; do
+            while IFS= read -r mod; do
+                [ -z "$mod" ] && continue
+                if [ -n "${base_modules[$mod]:-}" ]; then
+                    warn "OVERLAY CONFLICT: '$mod'"
+                    echo "    AOSP : ${base_modules[$mod]}"
+                    echo "    Ovl  : $f"
+                fi
+            done < <(grep -hoE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*[^ ]+' "$f" 2>/dev/null \
+                | awk '{print $NF}' | tr -d '"' | sort -u || true)
+        done < <(find "$od" -maxdepth 4 -type f -name "Android.mk" 2>/dev/null)
+    done
+}
+
+# ------------------------------------------------------------
+# Fix 3: Cleanup artifact out/ untuk module duplikat
+# ------------------------------------------------------------
+cleanup_duplicate_artifacts() {
+    local module="$1"
+    local out_dir="out"
+
+    [ -d "$out_dir" ] || return 0
+
+    info "Membersihkan artifact '$module' di $out_dir ..."
+    find "$out_dir" -type d -name "$module" -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$out_dir" -type f -name "*${module}*" -delete 2>/dev/null || true
+    ok "Artifact '$module' dibersihkan."
+}
+
+# ------------------------------------------------------------
+# Fix 4: Verifikasi module unik
+# ------------------------------------------------------------
+verify_no_duplicate() {
+    local module="$1"
+    local scan_root="${2:-external/mesa}"
+
+    local count
+    count=$(grep -rlE "LOCAL_MODULE[[:space:]]*:?=[[:space:]]*${module}([[:space:]]|$)" \
+        "$scan_root" --include="Android.mk" 2>/dev/null | wc -l | tr -d ' ')
+
+    local count_bp
+    count_bp=$(grep -rlE "name[[:space:]]*:[[:space:]]*\"${module}\"" \
+        "$scan_root" --include="Android.bp" 2>/dev/null | wc -l | tr -d ' ')
+
+    local total=$((count + count_bp))
+
+    if [ "$total" -gt 1 ]; then
+        err "Module '$module' MASIH terdefinisi $total kali di $scan_root"
+        return 1
+    fi
+
+    ok "Module '$module' unik ($total definisi)."
+    return 0
+}
+
+# ------------------------------------------------------------
 # Deteksi & auto-fix konflik Android.mk vs Android.bp
-# HANYA di folder yang sama, HANYA kalau module-nya sama
 # ------------------------------------------------------------
 fix_mk_bp_conflict() {
     local dir="$1"
@@ -110,24 +222,20 @@ fix_mk_bp_conflict() {
     local mk="$dir/Android.mk"
     local bp="$dir/Android.bp"
 
-    # Skip kalau salah satu tidak ada
     if [ ! -f "$mk" ] || [ ! -f "$bp" ]; then
         return 0
     fi
 
     info "Cek konflik mk/bp di: $dir"
 
-    # Ekstrak module dari Android.mk
     local mk_modules
     mk_modules=$(grep -hoE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*[^ ]+' "$mk" 2>/dev/null \
         | awk '{print $NF}' | tr -d '"' | sort -u || true)
 
-    # Ekstrak module dari Android.bp
     local bp_modules
     bp_modules=$(grep -hoE 'name[[:space:]]*:[[:space:]]*"[^"]+"' "$bp" 2>/dev/null \
         | sed -E 's/.*"([^"]+)".*/\1/' | sort -u || true)
 
-    # Cari module yang sama
     local conflict_modules=""
     while IFS= read -r mod; do
         [ -z "$mod" ] && continue
@@ -148,7 +256,6 @@ fix_mk_bp_conflict() {
     echo "    Android.mk: $mk"
     echo "    Android.bp: $bp"
 
-    # Auto-fix: disable Android.mk (karena Android.bp modern)
     disable_file "$mk" "konflik module: $conflict_modules"
 
     return 0
@@ -164,7 +271,6 @@ fix_duplicate_modules_in_dir() {
         return 0
     fi
 
-    # Kumpulkan semua module dari Android.mk
     declare -A module_map
 
     while IFS= read -r mkfile; do
@@ -178,12 +284,10 @@ fix_duplicate_modules_in_dir() {
             [ -z "$mod" ] && continue
 
             if [ -n "${module_map[$mod]:-}" ]; then
-                # Sudah ada di file lain -> konflik
                 warn "DUPLIKAT module '$mod':"
                 echo "    File 1: ${module_map[$mod]}"
                 echo "    File 2: $mkfile"
 
-                # Auto-fix: disable file kedua
                 disable_file "$mkfile" "module '$mod' duplikat dengan ${module_map[$mod]}"
             else
                 module_map[$mod]="$mkfile"
@@ -227,7 +331,6 @@ fix_mesa_vulkan() {
         echo "    Android.mk: $mk (define vulkan)"
         echo "    Android.bp: $bp (define vulkan)"
 
-        # Auto-fix: disable Android.mk
         disable_file "$mk" "vulkan duplikat dengan Android.bp"
 
         return 0
@@ -243,7 +346,7 @@ fix_mesa_vulkan() {
 echo
 echo "============================================================"
 echo "        LINEAGEOS 23.2 GENERIC ARM64 BUILDER"
-echo "        (with Auto-Fix Duplicate Modules)"
+echo "        (with Auto-Fix Duplicate Modules - Enhanced)"
 echo "============================================================"
 echo
 
@@ -341,7 +444,7 @@ export LC_ALL=C
 ok "Build environment configured."
 
 # ============================================================
-# AUTO-DETECT & AUTO-FIX DUPLICATE MODULES
+# AUTO-DETECT & AUTO-FIX DUPLICATE MODULES (ENHANCED)
 # ============================================================
 
 section "AUTO-DETECT & AUTO-FIX DUPLICATE MODULES"
@@ -349,25 +452,30 @@ section "AUTO-DETECT & AUTO-FIX DUPLICATE MODULES"
 FIXED_COUNT=0
 
 # --------------------------------------------
-# 1. Fix mesa vulkan (paling umum)
+# Step 1: Fix mesa vulkan (base + nested)
 # --------------------------------------------
 info "Step 1: Cek mesa vulkan conflict..."
-BEFORE_DISABLED=$(find external/mesa/android -name "*.disabled" 2>/dev/null | wc -l | head -1)
+
+BEFORE_DISABLED=$(find external/mesa -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
 BEFORE_DISABLED=${BEFORE_DISABLED:-0}
 
-fix_mesa_vulkan || true
+fix_mesa_vulkan       || true
+fix_mesa_nested_path  || true
 
-AFTER_DISABLED=$(find external/mesa/android -name "*.disabled" 2>/dev/null | wc -l | head -1)
+AFTER_DISABLED=$(find external/mesa -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
 AFTER_DISABLED=${AFTER_DISABLED:-0}
 
 if [ "$AFTER_DISABLED" -gt "$BEFORE_DISABLED" ]; then
     FIXED_COUNT=$((FIXED_COUNT + 1))
+    ok "Mesa vulkan: ada file di-disable."
+else
+    info "Mesa vulkan: tidak ada yang perlu di-disable."
 fi
 
 echo
 
 # --------------------------------------------
-# 2. Scan folder yang relevan untuk konflik mk/bp
+# Step 2: Scan konflik Android.mk vs Android.bp
 # --------------------------------------------
 info "Step 2: Scan konflik Android.mk vs Android.bp..."
 
@@ -381,7 +489,7 @@ done
 echo
 
 # --------------------------------------------
-# 3. Scan module duplikat (beda file)
+# Step 3: Scan module duplikat antar file
 # --------------------------------------------
 info "Step 3: Scan module duplikat antar file..."
 
@@ -394,9 +502,42 @@ done
 echo
 
 # --------------------------------------------
-# 4. Summary
+# Step 3.5: Scan overlay vendor/device (warning only)
 # --------------------------------------------
-DISABLED_FILES=$(find "${DEDUP_SCAN_DIRS[@]}" -name "*.disabled" 2>/dev/null | wc -l | head -1)
+info "Step 3.5: Scan overlay vendor/device (warning only)..."
+fix_overlay_conflict || true
+
+echo
+
+# --------------------------------------------
+# Step 3.6: Cleanup artifact out/ untuk module kritis
+# --------------------------------------------
+info "Step 3.6: Cleanup artifact out/ untuk module kritis..."
+cleanup_duplicate_artifacts "vulkan"           || true
+cleanup_duplicate_artifacts "libcrypto_static" || true
+
+echo
+
+# --------------------------------------------
+# Step 4: Verifikasi module kritis unik
+# --------------------------------------------
+info "Step 4: Verifikasi module kritis unik..."
+
+VERIFY_FAIL=false
+verify_no_duplicate "vulkan" "external/mesa" || VERIFY_FAIL=true
+
+if [ "$VERIFY_FAIL" = true ]; then
+    err "Masih ada duplikat. Build tetap lanjut, tapi risiko gagal tinggi."
+else
+    ok "Semua module kritis unik."
+fi
+
+echo
+
+# --------------------------------------------
+# Step 5: Summary
+# --------------------------------------------
+DISABLED_FILES=$(find "${DEDUP_SCAN_DIRS[@]}" -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
 DISABLED_FILES=${DISABLED_FILES:-0}
 
 if [ "$DISABLED_FILES" -gt 0 ]; then
@@ -407,6 +548,8 @@ if [ "$DISABLED_FILES" -gt 0 ]; then
 else
     ok "Tidak ada file yang perlu di-disable."
 fi
+
+echo
 
 # ============================================================
 # PATCH LIBJXL
@@ -753,7 +896,6 @@ section "FINAL DUPLICATE CHECK"
 
 FINAL_CONFLICT=false
 
-# Cek mesa vulkan conflict terakhir
 MESA_MK="external/mesa/android/Android.mk"
 MESA_BP="external/mesa/android/Android.bp"
 
@@ -904,52 +1046,4 @@ for image in \
     recovery.img \
     super.img \
     product.img \
-    system_ext.img
-do
-    if [ -f "$OUT_DIR/$image" ]; then
-        SIZE="$(du -h "$OUT_DIR/$image" | awk '{print $1}')"
-        ok "$image ($SIZE)"
-        IMAGE_FOUND=1
-    fi
-done
-
-if [ "$IMAGE_FOUND" -eq 0 ]; then
-    warn "Tidak ada image yang ditemukan di output."
-else
-    echo
-    ok "Image hasil build ditemukan."
-fi
-
-# ============================================================
-# FINAL
-# ============================================================
-
-section "BUILD FINISHED"
-
-echo
-echo -e "${GREEN}${BOLD}"
-echo "============================================================"
-echo "              BUILD SUCCESSFUL"
-echo "============================================================"
-echo -e "${RESET}"
-
-echo "ROM        : $ROM_NAME"
-echo "Device     : $DEVICE"
-echo "Target     : $BUILD_TARGET"
-echo "Output     : $OUT_DIR"
-echo "Build time : $BUILD_TIME seconds"
-echo
-
-echo "Generated files:"
-find "$OUT_DIR" \
-    -maxdepth 1 \
-    -type f \
-    \( -name "*.img" -o -name "*.zip" -o -name "*.zip.md5sum" \) \
-    -printf "  %f\n" \
-    2>/dev/null | sort || true
-
-echo
-echo "============================================================"
-echo "                    DONE"
-echo "============================================================"
-echo
+    system_ext
