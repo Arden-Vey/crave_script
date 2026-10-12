@@ -684,38 +684,6 @@ else
 fi
 
 # ============================================================
-# CLEAN SOONG STATE
-# ============================================================
-
-section "CLEANING SOONG STATE"
-
-if [ -f "out/soong/build.lineage_${DEVICE}.ninja" ]; then
-    rm -f "out/soong/build.lineage_${DEVICE}.ninja"
-    ok "Removed stale Soong ninja file."
-fi
-
-if [ -d "out/soong/.bootstrap" ]; then
-    rm -rf "out/soong/.bootstrap"
-    ok "Removed Soong bootstrap state."
-fi
-
-if [ -d "out/build.trace" ]; then
-    rm -rf "out/build.trace"
-    ok "Removed stale build.trace."
-fi
-
-shopt -s nullglob
-KATI_STAMPS=(out/.kati_stamp-*)
-shopt -u nullglob
-
-if [ ${#KATI_STAMPS[@]} -gt 0 ]; then
-    rm -f "${KATI_STAMPS[@]}"
-    ok "Removed stale kati stamps."
-fi
-
-ok "Soong state cleaned."
-
-# ============================================================
 # ENVSETUP
 # ============================================================
 
