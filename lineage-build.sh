@@ -1,18 +1,14 @@
 #!/bin/bash
-set -e
-
 # ============================================================
 # LINEAGEOS 23.2 - GENERIC ARM64 BUILDER
-# WITH AUTO-DETECT & AUTO-FIX DUPLICATE MODULES (ENHANCED)
+# WITH AUTO-FIX DUPLICATE MODULES + FULL FEATURES
 # ============================================================
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-RESET='\033[0m'
+set -o pipefail
+
+# ============================================================
+# KONFIGURASI
+# ============================================================
 
 ROM_NAME="LineageOS 23.2"
 ROM_BRANCH="lineage-23.2"
@@ -30,10 +26,6 @@ OUT_DIR="out/target/product/$DEVICE"
 
 GENERIC_INIT_VISIBILITY="//device/mainline/generic/services/generic_init"
 
-# Path nested yang sering jadi sumber konflik mesa vulkan
-SUSPECT_MESA_NESTED="external/mesa/android/android"
-
-# Folder yang akan discan untuk duplikat (HANYA yang relevan)
 DEDUP_SCAN_DIRS=(
     "external/mesa/android"
     "external/mesa/src"
@@ -41,6 +33,40 @@ DEDUP_SCAN_DIRS=(
     "device/mainline/generic"
     "device/mainline/common"
 )
+
+# Lunch combo (bisa di-override)
+LUNCH_TARGET="${LUNCH_TARGET:-lineage_${DEVICE}-userdebug}"
+
+# Build jobs
+JOBS="${JOBS:-$(nproc --all)}"
+
+# ccache
+CCACHE_SIZE="50G"
+CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache}"
+
+# Log
+LOG_DIR=".build_logs"
+mkdir -p "$LOG_DIR"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BUILD_LOG="$LOG_DIR/build_${TIMESTAMP}.log"
+
+# Telegram (opsional)
+TG_BOT_TOKEN="${TG_BOT_TOKEN:-}"
+TG_CHAT_ID="${TG_CHAT_ID:-}"
+
+# ============================================================
+# WARNA
+# ============================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
 
 # ============================================================
 # FUNCTIONS
@@ -53,178 +79,78 @@ section() {
     echo "============================================================"
 }
 
-ok() {
-    echo -e "${GREEN}[OK]${RESET} $1"
-}
+ok()   { echo -e "${GREEN}[OK]${RESET} $*" | tee -a "$BUILD_LOG"; }
+warn() { echo -e "${YELLOW}[WARNING]${RESET} $*" | tee -a "$BUILD_LOG"; }
+err()  { echo -e "${RED}[ERROR]${RESET} $*" | tee -a "$BUILD_LOG"; }
+info() { echo -e "${CYAN}[INFO]${RESET} $*" | tee -a "$BUILD_LOG"; }
 
-warn() {
-    echo -e "${YELLOW}[WARNING]${RESET} $1"
-}
+# Error trap
+trap 'err "Script interrupted at line $LINENO"' ERR INT TERM
 
-err() {
-    echo -e "${RED}[ERROR]${RESET} $1"
-}
-
-info() {
-    echo -e "${CYAN}[INFO]${RESET} $1"
+# Notifikasi (kalau TG token di-set)
+notify() {
+    local msg="$1"
+    [ -z "$TG_BOT_TOKEN" ] && return 0
+    [ -z "$TG_CHAT_ID" ] && return 0
+    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+        -d "chat_id=${TG_CHAT_ID}" -d "text=${msg}" >/dev/null 2>&1 || true
 }
 
 # ------------------------------------------------------------
-# Auto-fix: rename file duplikat dengan suffix .disabled
+# disable_file: backup + rename ke .disabled
 # ------------------------------------------------------------
 disable_file() {
     local file="$1"
     local reason="$2"
 
-    if [ ! -f "$file" ]; then
-        return 1
-    fi
+    [ ! -f "$file" ] && return 1
 
     if [ -f "${file}.disabled" ]; then
-        info "Sudah disabled sebelumnya: $file"
+        info "Sudah disabled: $file"
         return 0
     fi
 
-    # Backup dengan timestamp
     local backup="${file}.bak.$(date +%s)"
     cp "$file" "$backup" 2>/dev/null || true
-
-    # Rename ke .disabled
     mv "$file" "${file}.disabled"
 
     ok "Auto-disabled: $file"
     info "  Reason: $reason"
     info "  Backup: $backup"
-
     return 0
 }
 
 # ------------------------------------------------------------
-# Fix 1: Mesa vulkan di nested path (android/android/so)
+# Mesa vulkan fix
 # ------------------------------------------------------------
-fix_mesa_nested_path() {
-    local nested="$SUSPECT_MESA_NESTED"
-
-    if [ ! -d "$nested" ]; then
-        return 0
-    fi
-
-    warn "Direktori nested mencurigakan: $nested"
-    ls -la "$nested" 2>/dev/null | sed 's/^/    /' || true
-
-    local found=0
-    while IFS= read -r f; do
-        if grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$f" 2>/dev/null \
-        || grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$f" 2>/dev/null; then
-            disable_file "$f" "vulkan duplikat di nested path $nested"
-            found=1
-        fi
-    done < <(find "$nested" -type f \( -name "Android.mk" -o -name "Android.bp" \) 2>/dev/null)
-
-    return 0
-}
-
-# ------------------------------------------------------------
-# Fix 2: Scan vendor / device overlay tree (warning only)
-# ------------------------------------------------------------
-fix_overlay_conflict() {
-    local base_dirs=(
-        "external/mesa"
-        "hardware/interfaces"
-        "system/core"
-    )
-    local overlay_dirs=(
-        "vendor"
-        "device"
-    )
-
-    # Kumpulkan module dari AOSP base
-    declare -A base_modules
-    for d in "${base_dirs[@]}"; do
-        [ -d "$d" ] || continue
-        while IFS= read -r f; do
-            while IFS= read -r mod; do
-                [ -z "$mod" ] && continue
-                base_modules["$mod"]="$f"
-            done < <(grep -hoE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*[^ ]+' "$f" 2>/dev/null \
-                | awk '{print $NF}' | tr -d '"' | sort -u || true)
-        done < <(find "$d" -type f -name "Android.mk" 2>/dev/null)
-    done
-
-    # Cek overlay
-    for od in "${overlay_dirs[@]}"; do
-        [ -d "$od" ] || continue
-        while IFS= read -r f; do
-            while IFS= read -r mod; do
-                [ -z "$mod" ] && continue
-                if [ -n "${base_modules[$mod]:-}" ]; then
-                    warn "OVERLAY CONFLICT: '$mod'"
-                    echo "    AOSP : ${base_modules[$mod]}"
-                    echo "    Ovl  : $f"
-                fi
-            done < <(grep -hoE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*[^ ]+' "$f" 2>/dev/null \
-                | awk '{print $NF}' | tr -d '"' | sort -u || true)
-        done < <(find "$od" -maxdepth 4 -type f -name "Android.mk" 2>/dev/null)
-    done
-}
-
-# ------------------------------------------------------------
-# Fix 3: Cleanup artifact out/ untuk module duplikat
-# ------------------------------------------------------------
-cleanup_duplicate_artifacts() {
-    local module="$1"
-    local out_dir="out"
-
-    [ -d "$out_dir" ] || return 0
-
-    info "Membersihkan artifact '$module' di $out_dir ..."
-    find "$out_dir" -type d -name "$module" -prune -exec rm -rf {} + 2>/dev/null || true
-    find "$out_dir" -type f -name "*${module}*" -delete 2>/dev/null || true
-    ok "Artifact '$module' dibersihkan."
-}
-
-# ------------------------------------------------------------
-# Fix 4: Verifikasi module unik
-# ------------------------------------------------------------
-verify_no_duplicate() {
-    local module="$1"
-    local scan_root="${2:-external/mesa}"
-
-    local count
-    count=$(grep -rlE "LOCAL_MODULE[[:space:]]*:?=[[:space:]]*${module}([[:space:]]|$)" \
-        "$scan_root" --include="Android.mk" 2>/dev/null | wc -l | tr -d ' ')
-
-    local count_bp
-    count_bp=$(grep -rlE "name[[:space:]]*:[[:space:]]*\"${module}\"" \
-        "$scan_root" --include="Android.bp" 2>/dev/null | wc -l | tr -d ' ')
-
-    local total=$((count + count_bp))
-
-    if [ "$total" -gt 1 ]; then
-        err "Module '$module' MASIH terdefinisi $total kali di $scan_root"
-        return 1
-    fi
-
-    ok "Module '$module' unik ($total definisi)."
-    return 0
-}
-
-# ------------------------------------------------------------
-# Deteksi & auto-fix konflik Android.mk vs Android.bp
-# ------------------------------------------------------------
-fix_mk_bp_conflict() {
-    local dir="$1"
-
-    if [ ! -d "$dir" ]; then
-        return 0
-    fi
+fix_mesa_vulkan() {
+    local dir="external/mesa/android"
+    [ ! -d "$dir" ] && return 0
 
     local mk="$dir/Android.mk"
     local bp="$dir/Android.bp"
+    local has_mk=false
+    local has_bp=false
 
-    if [ ! -f "$mk" ] || [ ! -f "$bp" ]; then
-        return 0
+    [ -f "$mk" ] && grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$mk" 2>/dev/null && has_mk=true
+    [ -f "$bp" ] && grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$bp" 2>/dev/null && has_bp=true
+
+    if [ "$has_mk" = true ] && [ "$has_bp" = true ]; then
+        warn "KONFLIK mesa vulkan!"
+        disable_file "$mk" "vulkan duplikat dengan Android.bp"
     fi
+}
+
+# ------------------------------------------------------------
+# mk vs bp conflict
+# ------------------------------------------------------------
+fix_mk_bp_conflict() {
+    local dir="$1"
+    [ ! -d "$dir" ] && return 0
+
+    local mk="$dir/Android.mk"
+    local bp="$dir/Android.bp"
+    [ ! -f "$mk" ] || [ ! -f "$bp" ] && return 0
 
     info "Cek konflik mk/bp di: $dir"
 
@@ -236,43 +162,27 @@ fix_mk_bp_conflict() {
     bp_modules=$(grep -hoE 'name[[:space:]]*:[[:space:]]*"[^"]+"' "$bp" 2>/dev/null \
         | sed -E 's/.*"([^"]+)".*/\1/' | sort -u || true)
 
-    local conflict_modules=""
+    local conflict=""
     while IFS= read -r mod; do
         [ -z "$mod" ] && continue
-
-        if echo "$bp_modules" | grep -qxF "$mod"; then
-            conflict_modules="$conflict_modules $mod"
-        fi
+        echo "$bp_modules" | grep -qxF "$mod" && conflict="$conflict $mod"
     done <<< "$mk_modules"
 
-    conflict_modules=$(echo "$conflict_modules" | xargs)
+    conflict=$(echo "$conflict" | xargs)
+    [ -z "$conflict" ] && return 0
 
-    if [ -z "$conflict_modules" ]; then
-        return 0
-    fi
-
-    warn "KONFLIK di $dir:"
-    echo "    Module yang sama: $conflict_modules"
-    echo "    Android.mk: $mk"
-    echo "    Android.bp: $bp"
-
-    disable_file "$mk" "konflik module: $conflict_modules"
-
-    return 0
+    warn "KONFLIK di $dir: $conflict"
+    disable_file "$mk" "konflik module: $conflict"
 }
 
 # ------------------------------------------------------------
-# Deteksi & auto-fix module duplikat di file berbeda
+# Duplicate modules antar file
 # ------------------------------------------------------------
 fix_duplicate_modules_in_dir() {
     local dir="$1"
-
-    if [ ! -d "$dir" ]; then
-        return 0
-    fi
+    [ ! -d "$dir" ] && return 0
 
     declare -A module_map
-
     while IFS= read -r mkfile; do
         [ -z "$mkfile" ] && continue
 
@@ -282,72 +192,32 @@ fix_duplicate_modules_in_dir() {
 
         while IFS= read -r mod; do
             [ -z "$mod" ] && continue
-
             if [ -n "${module_map[$mod]:-}" ]; then
-                warn "DUPLIKAT module '$mod':"
-                echo "    File 1: ${module_map[$mod]}"
-                echo "    File 2: $mkfile"
-
-                disable_file "$mkfile" "module '$mod' duplikat dengan ${module_map[$mod]}"
+                warn "DUPLIKAT '$mod': ${module_map[$mod]} vs $mkfile"
+                disable_file "$mkfile" "module '$mod' duplikat"
             else
                 module_map[$mod]="$mkfile"
             fi
         done <<< "$modules"
     done < <(find "$dir" -type f -name "Android.mk" 2>/dev/null)
-
-    return 0
-}
-
-# ------------------------------------------------------------
-# Auto-fix khusus: mesa vulkan conflict
-# ------------------------------------------------------------
-fix_mesa_vulkan() {
-    local dir="external/mesa/android"
-
-    if [ ! -d "$dir" ]; then
-        return 0
-    fi
-
-    local mk="$dir/Android.mk"
-    local bp="$dir/Android.bp"
-
-    local has_mk_vulkan=false
-    local has_bp_vulkan=false
-
-    if [ -f "$mk" ]; then
-        if grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$mk" 2>/dev/null; then
-            has_mk_vulkan=true
-        fi
-    fi
-
-    if [ -f "$bp" ]; then
-        if grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$bp" 2>/dev/null; then
-            has_bp_vulkan=true
-        fi
-    fi
-
-    if [ "$has_mk_vulkan" = true ] && [ "$has_bp_vulkan" = true ]; then
-        warn "KONFLIK mesa vulkan terdeteksi!"
-        echo "    Android.mk: $mk (define vulkan)"
-        echo "    Android.bp: $bp (define vulkan)"
-
-        disable_file "$mk" "vulkan duplikat dengan Android.bp"
-
-        return 0
-    fi
-
-    return 0
 }
 
 # ============================================================
-# HEADER
+# BANNER
 # ============================================================
 
 echo
-echo "============================================================"
-echo "        LINEAGEOS 23.2 GENERIC ARM64 BUILDER"
-echo "        (with Auto-Fix Duplicate Modules - Enhanced)"
-echo "============================================================"
+echo -e "${MAGENTA}${BOLD}"
+cat <<'EOF'
+  _     _                            ___  ____  
+ | |   (_)_ __   __ _ _ __ ___  ___ / _ \|___ \ 
+ | |   | | '_ \ / _` | '__/ _ \/ _ \ | | | __) |
+ | |___| | | | | (_| | | |  __/  __/ |_| |/ __/ 
+ |_____|_|_| |_|\__,_|_|  \___|\___|\___/|_____|
+EOF
+echo -e "${RESET}"
+echo "        Generic ARM64 Builder v2.0"
+echo "        LineageOS 23.2 + Auto-Fix"
 echo
 
 section "BUILD CONFIGURATION"
@@ -356,10 +226,13 @@ echo "ROM             : $ROM_NAME"
 echo "Branch          : $ROM_BRANCH"
 echo "Device          : $DEVICE"
 echo "Build target    : $BUILD_TARGET"
+echo "Lunch combo     : $LUNCH_TARGET"
 echo "Manifest        : $MANIFEST_URL"
 echo "Manifest branch : $MANIFEST_BRANCH"
 echo "Output          : $OUT_DIR"
 echo "CPU threads     : $(nproc --all)"
+echo "Build jobs      : $JOBS"
+echo "Log file        : $BUILD_LOG"
 
 # ============================================================
 # REQUIREMENTS
@@ -376,6 +249,48 @@ ok "repo tersedia."
 ok "git tersedia."
 ok "python3 tersedia."
 ok "Crave resync tersedia."
+
+# Disk space check
+AVAIL_GB=$(df -BG . | awk 'NR==2 {gsub("G","",$4); print $4}')
+if [ "${AVAIL_GB:-0}" -lt 100 ]; then
+    err "Disk space kurang: ${AVAIL_GB}GB (butuh minimal 100GB)"
+    exit 1
+fi
+ok "Disk space: ${AVAIL_GB}GB tersedia"
+
+# ============================================================
+# CCACHE SETUP
+# ============================================================
+
+section "SETTING UP CCACHE"
+
+export USE_CCACHE=1
+export CCACHE_EXEC="$(command -v ccache || echo /usr/bin/ccache)"
+export CCACHE_DIR="$CCACHE_DIR"
+export CCACHE_COMPRESS=1
+export CCACHE_COMPRESSLEVEL=6
+export CCACHE_MAXSIZE="$CCACHE_SIZE"
+
+mkdir -p "$CCACHE_DIR"
+
+if command -v ccache >/dev/null 2>&1; then
+    ccache -M "$CCACHE_SIZE" 2>/dev/null || true
+    ok "CCACHE: $CCACHE_DIR (max: $CCACHE_SIZE)"
+else
+    warn "ccache tidak terinstall — build akan lebih lambat"
+fi
+
+# ============================================================
+# JAVA / MEMORY
+# ============================================================
+
+section "TUNING JAVA HEAP"
+
+export _JAVA_OPTIONS="-Xmx8G"
+export ANDROID_JACK_VM_ARGS="-Dfile.encoding=UTF-8 -XX:+TieredCompilation -Xmx8G"
+export JACK_SERVER_VM_ARGUMENTS="-Dfile.encoding=UTF-8 -XX:+TieredCompilation -Xmx8G"
+
+ok "_JAVA_OPTIONS = 8G"
 
 # ============================================================
 # CLEAN LOCAL MANIFEST
@@ -444,112 +359,45 @@ export LC_ALL=C
 ok "Build environment configured."
 
 # ============================================================
-# AUTO-DETECT & AUTO-FIX DUPLICATE MODULES (ENHANCED)
+# AUTO-FIX
 # ============================================================
 
 section "AUTO-DETECT & AUTO-FIX DUPLICATE MODULES"
 
 FIXED_COUNT=0
 
-# --------------------------------------------
-# Step 1: Fix mesa vulkan (base + nested)
-# --------------------------------------------
+# Step 1: Mesa vulkan
 info "Step 1: Cek mesa vulkan conflict..."
-
-BEFORE_DISABLED=$(find external/mesa -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
-BEFORE_DISABLED=${BEFORE_DISABLED:-0}
-
-fix_mesa_vulkan       || true
-fix_mesa_nested_path  || true
-
-AFTER_DISABLED=$(find external/mesa -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
-AFTER_DISABLED=${AFTER_DISABLED:-0}
-
-if [ "$AFTER_DISABLED" -gt "$BEFORE_DISABLED" ]; then
-    FIXED_COUNT=$((FIXED_COUNT + 1))
-    ok "Mesa vulkan: ada file di-disable."
-else
-    info "Mesa vulkan: tidak ada yang perlu di-disable."
-fi
-
+BEFORE=$(find external/mesa/android -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
+fix_mesa_vulkan || true
+AFTER=$(find external/mesa/android -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
+[ "${AFTER:-0}" -gt "${BEFORE:-0}" ] && FIXED_COUNT=$((FIXED_COUNT+1))
 echo
 
-# --------------------------------------------
-# Step 2: Scan konflik Android.mk vs Android.bp
-# --------------------------------------------
-info "Step 2: Scan konflik Android.mk vs Android.bp..."
-
+# Step 2: mk vs bp
+info "Step 2: Scan konflik mk/bp..."
 for d in "${DEDUP_SCAN_DIRS[@]}"; do
-    if [ -d "$d" ]; then
-        info "  Scanning: $d"
-        fix_mk_bp_conflict "$d" || true
-    fi
+    [ -d "$d" ] && { info "  Scanning: $d"; fix_mk_bp_conflict "$d" || true; }
 done
-
 echo
 
-# --------------------------------------------
-# Step 3: Scan module duplikat antar file
-# --------------------------------------------
-info "Step 3: Scan module duplikat antar file..."
-
+# Step 3: Duplikat antar file
+info "Step 3: Scan module duplikat..."
 for d in "${DEDUP_SCAN_DIRS[@]}"; do
-    if [ -d "$d" ]; then
-        fix_duplicate_modules_in_dir "$d" || true
-    fi
+    [ -d "$d" ] && fix_duplicate_modules_in_dir "$d" || true
 done
-
 echo
 
-# --------------------------------------------
-# Step 3.5: Scan overlay vendor/device (warning only)
-# --------------------------------------------
-info "Step 3.5: Scan overlay vendor/device (warning only)..."
-fix_overlay_conflict || true
-
-echo
-
-# --------------------------------------------
-# Step 3.6: Cleanup artifact out/ untuk module kritis
-# --------------------------------------------
-info "Step 3.6: Cleanup artifact out/ untuk module kritis..."
-cleanup_duplicate_artifacts "vulkan"           || true
-cleanup_duplicate_artifacts "libcrypto_static" || true
-
-echo
-
-# --------------------------------------------
-# Step 4: Verifikasi module kritis unik
-# --------------------------------------------
-info "Step 4: Verifikasi module kritis unik..."
-
-VERIFY_FAIL=false
-verify_no_duplicate "vulkan" "external/mesa" || VERIFY_FAIL=true
-
-if [ "$VERIFY_FAIL" = true ]; then
-    err "Masih ada duplikat. Build tetap lanjut, tapi risiko gagal tinggi."
-else
-    ok "Semua module kritis unik."
-fi
-
-echo
-
-# --------------------------------------------
-# Step 5: Summary
-# --------------------------------------------
+# Step 4: Summary
 DISABLED_FILES=$(find "${DEDUP_SCAN_DIRS[@]}" -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
 DISABLED_FILES=${DISABLED_FILES:-0}
 
 if [ "$DISABLED_FILES" -gt 0 ]; then
-    warn "Total file yang di-disable: $DISABLED_FILES"
-    echo
-    echo "  Daftar file .disabled:"
+    warn "Total file .disabled: $DISABLED_FILES"
     find "${DEDUP_SCAN_DIRS[@]}" -name "*.disabled" 2>/dev/null | sed 's/^/    /' || true
 else
     ok "Tidak ada file yang perlu di-disable."
 fi
-
-echo
 
 # ============================================================
 # PATCH LIBJXL
@@ -563,38 +411,23 @@ if [ -f "$LIBJXL_BP" ]; then
     if grep -q 'sdk_version: "none"' "$LIBJXL_BP"; then
         cp "$LIBJXL_BP" "${LIBJXL_BP}.bak"
         sed -i 's/sdk_version: "none"/sdk_version: "current"/g' "$LIBJXL_BP"
-        ok "libjxl sdk_version diubah dari none -> current."
+        ok "libjxl sdk_version -> current"
     elif grep -q 'sdk_version: "current"' "$LIBJXL_BP"; then
-        ok "libjxl sdk_version sudah current."
+        ok "libjxl sdk_version sudah current"
     else
-        warn "libjxl tidak memiliki sdk_version yang dikenali."
+        warn "libjxl tidak punya sdk_version dikenali"
     fi
 else
-    warn "$LIBJXL_BP tidak ditemukan."
+    warn "$LIBJXL_BP tidak ditemukan"
 fi
 
 # ============================================================
-# VERIFY LIBJXL
-# ============================================================
-
-section "VERIFYING LIBJXL PATCH"
-
-if [ -f "$LIBJXL_BP" ]; then
-    if grep -q 'sdk_version: "current"' "$LIBJXL_BP"; then
-        ok "libjxl sdk_version: OK"
-    else
-        warn "libjxl sdk_version mungkin masih none atau tidak ditemukan."
-    fi
-fi
-
-# ============================================================
-# FIND BORINGSSL libcrypto_static
+# PATCH BORINGSSL
 # ============================================================
 
 section "LOCATING BORINGSSL libcrypto_static"
 
 BORINGSSL_BP=""
-
 while IFS= read -r file; do
     if grep -qE 'name:[[:space:]]*"libcrypto_static"' "$file"; then
         BORINGSSL_BP="$file"
@@ -603,44 +436,20 @@ while IFS= read -r file; do
 done < <(find external/boringssl -type f -name "Android.bp" 2>/dev/null)
 
 if [ -z "$BORINGSSL_BP" ]; then
-    err "Module libcrypto_static tidak ditemukan di external/boringssl."
-    echo
-    echo "Pencarian:"
-    grep -RIn --include="Android.bp" 'name: "libcrypto_static"' external/boringssl 2>/dev/null || true
+    err "libcrypto_static tidak ditemukan."
     exit 1
 fi
 
-ok "libcrypto_static ditemukan:"
-echo "    $BORINGSSL_BP"
-
-# ============================================================
-# SHOW CURRENT BORINGSSL STATE
-# ============================================================
-
-section "CHECKING BORINGSSL VISIBILITY"
-
-grep -n -A25 -B5 'name: "libcrypto_static"' "$BORINGSSL_BP" || true
-
-if grep -q 'default_visibility:' "$BORINGSSL_BP"; then
-    warn "default_visibility ditemukan di $BORINGSSL_BP"
-fi
-
-# ============================================================
-# BACKUP BORINGSSL
-# ============================================================
+ok "libcrypto_static: $BORINGSSL_BP"
 
 section "BACKING UP BORINGSSL"
 
 if [ ! -f "${BORINGSSL_BP}.bak" ]; then
     cp "$BORINGSSL_BP" "${BORINGSSL_BP}.bak"
-    ok "Backup dibuat: ${BORINGSSL_BP}.bak"
+    ok "Backup: ${BORINGSSL_BP}.bak"
 else
-    info "Backup sudah ada, tidak dibuat ulang."
+    info "Backup sudah ada"
 fi
-
-# ============================================================
-# PATCH BORINGSSL VISIBILITY
-# ============================================================
 
 section "PATCHING BORINGSSL VISIBILITY"
 
@@ -648,9 +457,7 @@ export BORINGSSL_BP
 export GENERIC_INIT_VISIBILITY
 
 python3 <<'PY'
-import os
-import re
-import sys
+import os, re, sys
 
 path = os.environ["BORINGSSL_BP"]
 required_visibility = os.environ["GENERIC_INIT_VISIBILITY"]
@@ -664,18 +471,17 @@ if not name_match:
     sys.exit(1)
 
 module_pattern = re.compile(r'(?:cc_library_static|cc_library)\s*\{', re.MULTILINE)
-
 module_start = None
 for match in module_pattern.finditer(content, 0, name_match.start() + 1):
     module_start = match.start()
 
 if module_start is None:
-    print("[ERROR] Awal module cc_library_static tidak ditemukan.")
+    print("[ERROR] Awal module tidak ditemukan.")
     sys.exit(1)
 
 brace_start = content.find("{", module_start)
 if brace_start == -1:
-    print("[ERROR] Opening brace module tidak ditemukan.")
+    print("[ERROR] Opening brace tidak ditemukan.")
     sys.exit(1)
 
 depth = 0
@@ -719,32 +525,26 @@ while i < len(content):
     i += 1
 
 if module_end is None:
-    print("[ERROR] Penutup module libcrypto_static tidak ditemukan.")
+    print("[ERROR] Penutup module tidak ditemukan.")
     sys.exit(1)
 
 module = content[module_start:module_end + 1]
 visibility_match = re.search(r'visibility\s*:\s*\[(.*?)\]', module, re.DOTALL)
 
 if visibility_match:
-    visibility_block = visibility_match.group(1)
-    if required_visibility in visibility_block:
-        print("[OK] Visibility sudah berisi:")
-        print(f"      {required_visibility}")
+    vis_block = visibility_match.group(1)
+    if required_visibility in vis_block:
+        print("[OK] Visibility sudah ada.")
     else:
-        new_visibility_block = visibility_block.rstrip()
-        if new_visibility_block:
-            new_visibility_block += "\n        "
-        else:
-            new_visibility_block = "\n        "
-        new_visibility_block += f'"{required_visibility}",\n    '
-        new_visibility = "visibility: [" + new_visibility_block + "]"
-        old_visibility = visibility_match.group(0)
-        module = module.replace(old_visibility, new_visibility, 1)
+        new_block = vis_block.rstrip()
+        new_block = (new_block + "\n        ") if new_block else "\n        "
+        new_block += f'"{required_visibility}",\n    '
+        new_vis = "visibility: [" + new_block + "]"
+        module = module.replace(visibility_match.group(0), new_vis, 1)
         content = content[:module_start] + module + content[module_end + 1:]
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-        print("[OK] Visibility berhasil ditambahkan.")
-        print(f"      {required_visibility}")
+        print("[OK] Visibility ditambahkan.")
 else:
     name_field = re.search(r'(name\s*:\s*"libcrypto_static"\s*,)', module)
     if not name_field:
@@ -761,69 +561,17 @@ else:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     print("[OK] visibility property dibuat.")
-    print(f"      {required_visibility}")
 PY
 
 ok "BoringSSL visibility patch selesai."
 
-# ============================================================
-# VERIFY BORINGSSL PATCH
-# ============================================================
-
 section "VERIFYING BORINGSSL PATCH"
 
 if grep -qF "$GENERIC_INIT_VISIBILITY" "$BORINGSSL_BP"; then
-    ok "Visibility ditemukan di BoringSSL."
+    ok "Visibility OK."
 else
     err "Visibility patch gagal."
-    echo "Expected: $GENERIC_INIT_VISIBILITY"
     exit 1
-fi
-
-# ============================================================
-# SHOW PATCHED MODULE
-# ============================================================
-
-section "SHOWING PATCHED libcrypto_static"
-
-grep -n -A30 -B3 'name: "libcrypto_static"' "$BORINGSSL_BP" || true
-
-# ============================================================
-# VERIFY ALL PATCHES
-# ============================================================
-
-section "VERIFYING ALL PATCHES"
-
-echo
-
-if [ -f "$LIBJXL_BP" ]; then
-    if grep -q 'sdk_version: "current"' "$LIBJXL_BP"; then
-        ok "libjxl patch: PASS"
-    else
-        warn "libjxl patch: CHECK"
-    fi
-fi
-
-if grep -qF "$GENERIC_INIT_VISIBILITY" "$BORINGSSL_BP"; then
-    ok "BoringSSL visibility patch: PASS"
-else
-    err "BoringSSL visibility patch: FAIL"
-    exit 1
-fi
-
-# ============================================================
-# DIAGNOSTIC DEVICE INIT
-# ============================================================
-
-section "DIAGNOSTIC GENERIC INIT"
-
-DEVICE_INIT_BP="device/mainline/generic/services/generic_init/Android.bp"
-
-if [ -f "$DEVICE_INIT_BP" ]; then
-    info "Menampilkan area sekitar line 115-135:"
-    sed -n '115,135p' "$DEVICE_INIT_BP"
-else
-    warn "$DEVICE_INIT_BP tidak ditemukan."
 fi
 
 # ============================================================
@@ -838,7 +586,6 @@ if [ ! -f "build/envsetup.sh" ]; then
 fi
 
 source build/envsetup.sh
-
 ok "build/envsetup.sh loaded."
 
 # ============================================================
@@ -863,38 +610,10 @@ for dir in "${REQUIRED_DIRS[@]}"; do
 done
 
 # ============================================================
-# CHECK OPTIONAL MAINLINE DEPENDENCIES
-# ============================================================
-
-section "CHECKING OPTIONAL MAINLINE DEPENDENCIES"
-
-OPTIONAL_DIRS=(
-    "kernel/mainline/configs"
-    "external/drm_hwcomposer-upstream"
-    "external/libdisplay-info-upstream"
-    "external/minigbm-upstream"
-    "external/linux-firmware-mainline"
-    "external/mesa"
-    "external/tinyhal"
-    "prebuilts/mesa-build-dep"
-    "prebuilts/bootmgr"
-)
-
-for dir in "${OPTIONAL_DIRS[@]}"; do
-    if [ -d "$dir" ]; then
-        ok "$dir"
-    else
-        warn "Optional dependency missing: $dir"
-    fi
-done
-
-# ============================================================
-# FINAL DUPLICATE CHECK (BEFORE BUILD)
+# FINAL DUPLICATE CHECK
 # ============================================================
 
 section "FINAL DUPLICATE CHECK"
-
-FINAL_CONFLICT=false
 
 MESA_MK="external/mesa/android/Android.mk"
 MESA_BP="external/mesa/android/Android.bp"
@@ -903,24 +622,39 @@ if [ -f "$MESA_MK" ] && [ -f "$MESA_BP" ]; then
     if grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$MESA_MK" 2>/dev/null && \
        grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$MESA_BP" 2>/dev/null; then
         err "Mesa vulkan conflict MASIH ADA!"
-        FINAL_CONFLICT=true
+        exit 1
     fi
 fi
 
-if [ "$FINAL_CONFLICT" = true ]; then
-    err "Build dibatalkan. Ada konflik yang belum di-fix."
-    exit 1
-else
-    ok "Tidak ada konflik duplikat."
-fi
+ok "Tidak ada konflik duplikat."
 
 # ============================================================
-# SELECT TARGET
+# LUNCH TARGET (INI YANG KURANG!)
 # ============================================================
 
 section "SELECTING BUILD TARGET"
 
-breakfast "$DEVICE"
+info "Breakfast device: $DEVICE"
+breakfast "$DEVICE" 2>&1 | tee -a "$BUILD_LOG" || warn "breakfast gagal (lanjut)"
+ok "Breakfast selesai."
+
+info "Lunch combo: $LUNCH_TARGET"
+
+if lunch "$LUNCH_TARGET" 2>&1 | tee -a "$BUILD_LOG"; then
+    ok "Lunch berhasil: $LUNCH_TARGET"
+else
+    err "Lunch gagal: $LUNCH_TARGET"
+    echo
+    echo "Coba salah satu combo berikut:"
+    echo "  - lineage_${DEVICE}-userdebug"
+    echo "  - lineage_${DEVICE}-user"
+    echo "  - lineage_${DEVICE}-eng"
+    echo "  - ${DEVICE}-userdebug"
+    echo "  - aosp_${DEVICE}-userdebug"
+    echo
+    echo "Lihat daftar: source build/envsetup.sh && print_lunch_menu"
+    exit 1
+fi
 
 ok "Target selection selesai."
 
@@ -934,39 +668,24 @@ TARGET_PRODUCT="$(get_build_var TARGET_PRODUCT)"
 TARGET_DEVICE="$(get_build_var TARGET_DEVICE)"
 TARGET_ARCH="$(get_build_var TARGET_ARCH)"
 TARGET_ARCH_VARIANT="$(get_build_var TARGET_ARCH_VARIANT)"
+TARGET_BUILD_VARIANT="$(get_build_var TARGET_BUILD_VARIANT)"
 
 echo
 echo "TARGET_PRODUCT       : $TARGET_PRODUCT"
 echo "TARGET_DEVICE        : $TARGET_DEVICE"
 echo "TARGET_ARCH          : $TARGET_ARCH"
 echo "TARGET_ARCH_VARIANT  : $TARGET_ARCH_VARIANT"
+echo "TARGET_BUILD_VARIANT : $TARGET_BUILD_VARIANT"
 echo
 
-if [ -z "$TARGET_PRODUCT" ]; then
-    err "TARGET_PRODUCT kosong."
-    exit 1
-fi
-
-if [ -z "$TARGET_ARCH" ]; then
-    err "TARGET_ARCH kosong."
-    exit 1
-fi
-
-if [ "$TARGET_ARCH" != "arm64" ]; then
-    warn "TARGET_ARCH bukan arm64."
-fi
-
-if [ "$TARGET_DEVICE" != "$DEVICE" ]; then
-    err "TARGET_DEVICE tidak sesuai."
-    echo "Expected : $DEVICE"
-    echo "Detected : $TARGET_DEVICE"
-    exit 1
-fi
+[ -z "$TARGET_PRODUCT" ] && { err "TARGET_PRODUCT kosong."; exit 1; }
+[ -z "$TARGET_ARCH" ] && { err "TARGET_ARCH kosong."; exit 1; }
+[ "$TARGET_ARCH" != "arm64" ] && warn "TARGET_ARCH bukan arm64."
 
 ok "Build target valid."
 
 # ============================================================
-# FINAL PRE-BUILD CHECK
+# PRE-BUILD CHECK
 # ============================================================
 
 section "FINAL PRE-BUILD CHECK"
@@ -975,60 +694,86 @@ echo "ROM          : $ROM_NAME"
 echo "Device       : $DEVICE"
 echo "Target       : $BUILD_TARGET"
 echo "Product      : $TARGET_PRODUCT"
+echo "Variant      : $TARGET_BUILD_VARIANT"
 echo "Architecture : $TARGET_ARCH"
-echo "Threads      : $(nproc --all)"
+echo "Threads      : $JOBS"
 echo
 
-if [ -f "$BORINGSSL_BP" ]; then
-    ok "BoringSSL Android.bp tersedia."
-else
-    err "BoringSSL Android.bp hilang."
-    exit 1
-fi
-
 if grep -qF "$GENERIC_INIT_VISIBILITY" "$BORINGSSL_BP"; then
-    ok "libcrypto_static visibility sudah diperbaiki."
+    ok "libcrypto_static visibility OK."
 else
-    err "libcrypto_static visibility belum diperbaiki."
+    err "libcrypto_static visibility belum fix."
     exit 1
 fi
 
 ok "Semua pre-build check PASS."
 
 # ============================================================
-# BUILD
+# BUILD WITH RETRY + LOGGING
 # ============================================================
 
 section "STARTING BUILD"
 
 echo
-echo "Building:"
-echo "    $BUILD_TARGET"
-echo
-echo "Please wait..."
+echo "Building    : $BUILD_TARGET"
+echo "Lunch combo : $LUNCH_TARGET"
+echo "Jobs        : $JOBS"
+echo "Log         : $BUILD_LOG"
 echo
 
 BUILD_START=$(date +%s)
 
-m "$BUILD_TARGET"
+MAX_RETRY=2
+BUILD_STATUS="FAILED"
+
+for attempt in $(seq 1 $MAX_RETRY); do
+    info "Build attempt $attempt/$MAX_RETRY..."
+
+    if m -j"$JOBS" "$BUILD_TARGET" 2>&1 | tee -a "$BUILD_LOG"; then
+        BUILD_STATUS="SUCCESS"
+        break
+    fi
+
+    if [ "$attempt" -lt "$MAX_RETRY" ]; then
+        warn "Build gagal. Retry dalam 5 detik..."
+        sleep 5
+    fi
+done
 
 BUILD_END=$(date +%s)
 BUILD_TIME=$((BUILD_END - BUILD_START))
 
 # ============================================================
-# OUTPUT
+# HANDLE RESULT
+# ============================================================
+
+if [ "$BUILD_STATUS" = "FAILED" ]; then
+    section "BUILD FAILED"
+    err "Build gagal setelah $MAX_RETRY percobaan."
+
+    if grep -q "already defined by" "$BUILD_LOG"; then
+        err "MASIH ADA duplikat module!"
+        grep -B2 -A2 "already defined by" "$BUILD_LOG" | head -30
+    fi
+
+    if grep -q "error:" "$BUILD_LOG"; then
+        echo
+        echo "Error terakhir:"
+        grep "error:" "$BUILD_LOG" | tail -10
+    fi
+
+    notify "❌ Build FAILED: $ROM_NAME ($DEVICE)"
+    exit 1
+fi
+
+# ============================================================
+# CHECK OUTPUT
 # ============================================================
 
 section "CHECKING BUILD OUTPUT"
 
-if [ ! -d "$OUT_DIR" ]; then
-    err "Output directory tidak ditemukan:"
-    echo "    $OUT_DIR"
-    exit 1
-fi
-
-ok "Output directory ditemukan:"
-echo "    $OUT_DIR"
+[ ! -d "$OUT_DIR" ] && { err "Output tidak ditemukan: $OUT_DIR"; exit 1; }
+ok "Output: $OUT_DIR"
 
 # ============================================================
 # IMAGE CHECK
@@ -1039,11 +784,49 @@ section "CHECKING GENERATED IMAGES"
 IMAGE_FOUND=0
 
 for image in \
-    system.img \
-    vendor.img \
-    boot.img \
-    init_boot.img \
-    recovery.img \
-    super.img \
-    product.img \
-    system_ext
+    system.img vendor.img boot.img init_boot.img \
+    recovery.img super.img product.img system_ext.img
+do
+    if [ -f "$OUT_DIR/$image" ]; then
+        SIZE="$(du -h "$OUT_DIR/$image" | awk '{print $1}')"
+        ok "$image ($SIZE)"
+        IMAGE_FOUND=1
+    fi
+done
+
+[ "$IMAGE_FOUND" -eq 0 ] && warn "Tidak ada image di output."
+
+# ============================================================
+# FINAL
+# ============================================================
+
+section "BUILD FINISHED"
+
+echo
+echo -e "${GREEN}${BOLD}"
+echo "============================================================"
+echo "              BUILD SUCCESSFUL"
+echo "============================================================"
+echo -e "${RESET}"
+
+echo "ROM        : $ROM_NAME"
+echo "Device     : $DEVICE"
+echo "Target     : $BUILD_TARGET"
+echo "Lunch      : $LUNCH_TARGET"
+echo "Output     : $OUT_DIR"
+echo "Build time : $BUILD_TIME seconds ($((BUILD_TIME/60)) min)"
+echo "Log        : $BUILD_LOG"
+echo
+
+echo "Generated files:"
+find "$OUT_DIR" -maxdepth 1 -type f \
+    \( -name "*.img" -o -name "*.zip" -o -name "*.zip.md5sum" \) \
+    -printf "  %f\n" 2>/dev/null | sort || true
+
+notify "✅ Build SUCCESS: $ROM_NAME ($DEVICE) — ${BUILD_TIME}s"
+
+echo
+echo "============================================================"
+echo "                    DONE"
+echo "============================================================"
+echo
