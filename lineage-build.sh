@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 # ============================================================
 # LINEAGEOS 23.2 - GENERIC ARM64 BUILDER
@@ -34,8 +35,9 @@ DEDUP_SCAN_DIRS=(
     "device/mainline/common"
 )
 
-# Lunch combo (bisa di-override)
-LUNCH_TARGET="${LUNCH_TARGET:-lineage_${DEVICE}-userdebug}"
+# Target dipilih otomatis oleh breakfast.
+# Jangan memaksakan lunch combo yang belum tentu tersedia.
+LUNCH_TARGET=""
 
 # Build jobs
 JOBS="${JOBS:-$(nproc --all)}"
@@ -92,8 +94,10 @@ notify() {
     local msg="$1"
     [ -z "$TG_BOT_TOKEN" ] && return 0
     [ -z "$TG_CHAT_ID" ] && return 0
+
     curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-        -d "chat_id=${TG_CHAT_ID}" -d "text=${msg}" >/dev/null 2>&1 || true
+        -d "chat_id=${TG_CHAT_ID}" \
+        -d "text=${msg}" >/dev/null 2>&1 || true
 }
 
 # ------------------------------------------------------------
@@ -132,8 +136,13 @@ fix_mesa_vulkan() {
     local has_mk=false
     local has_bp=false
 
-    [ -f "$mk" ] && grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$mk" 2>/dev/null && has_mk=true
-    [ -f "$bp" ] && grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$bp" 2>/dev/null && has_bp=true
+    [ -f "$mk" ] &&
+        grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$mk" 2>/dev/null &&
+        has_mk=true
+
+    [ -f "$bp" ] &&
+        grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$bp" 2>/dev/null &&
+        has_bp=true
 
     if [ "$has_mk" = true ] && [ "$has_bp" = true ]; then
         warn "KONFLIK mesa vulkan!"
@@ -150,6 +159,7 @@ fix_mk_bp_conflict() {
 
     local mk="$dir/Android.mk"
     local bp="$dir/Android.bp"
+
     [ ! -f "$mk" ] || [ ! -f "$bp" ] && return 0
 
     info "Cek konflik mk/bp di: $dir"
@@ -183,6 +193,7 @@ fix_duplicate_modules_in_dir() {
     [ ! -d "$dir" ] && return 0
 
     declare -A module_map
+
     while IFS= read -r mkfile; do
         [ -z "$mkfile" ] && continue
 
@@ -192,6 +203,7 @@ fix_duplicate_modules_in_dir() {
 
         while IFS= read -r mod; do
             [ -z "$mod" ] && continue
+
             if [ -n "${module_map[$mod]:-}" ]; then
                 warn "DUPLIKAT '$mod': ${module_map[$mod]} vs $mkfile"
                 disable_file "$mkfile" "module '$mod' duplikat"
@@ -199,6 +211,7 @@ fix_duplicate_modules_in_dir() {
                 module_map[$mod]="$mkfile"
             fi
         done <<< "$modules"
+
     done < <(find "$dir" -type f -name "Android.mk" 2>/dev/null)
 }
 
@@ -209,10 +222,10 @@ fix_duplicate_modules_in_dir() {
 echo
 echo -e "${MAGENTA}${BOLD}"
 cat <<'EOF'
-  _     _                            ___  ____  
- | |   (_)_ __   __ _ _ __ ___  ___ / _ \|___ \ 
+  _     _                            ___  ____
+ | |   (_)_ __   __ _ _ __ ___  ___ / _ \|___ \
  | |   | | '_ \ / _` | '__/ _ \/ _ \ | | | __) |
- | |___| | | | | (_| | | |  __/  __/ |_| |/ __/ 
+ | |___| | | | | (_| | | |  __/  __/ |_| |/ __/
  |_____|_|_| |_|\__,_|_|  \___|\___|\___/|_____|
 EOF
 echo -e "${RESET}"
@@ -226,7 +239,7 @@ echo "ROM             : $ROM_NAME"
 echo "Branch          : $ROM_BRANCH"
 echo "Device          : $DEVICE"
 echo "Build target    : $BUILD_TARGET"
-echo "Lunch combo     : $LUNCH_TARGET"
+echo "Target selection: breakfast $DEVICE"
 echo "Manifest        : $MANIFEST_URL"
 echo "Manifest branch : $MANIFEST_BRANCH"
 echo "Output          : $OUT_DIR"
@@ -240,10 +253,25 @@ echo "Log file        : $BUILD_LOG"
 
 section "CHECKING REQUIREMENTS"
 
-command -v repo >/dev/null 2>&1 || { err "repo tidak ditemukan."; exit 1; }
-command -v git >/dev/null 2>&1 || { err "git tidak ditemukan."; exit 1; }
-command -v python3 >/dev/null 2>&1 || { err "python3 tidak ditemukan."; exit 1; }
-[ -x "/opt/crave/resync.sh" ] || { err "/opt/crave/resync.sh tidak ditemukan."; exit 1; }
+command -v repo >/dev/null 2>&1 || {
+    err "repo tidak ditemukan."
+    exit 1
+}
+
+command -v git >/dev/null 2>&1 || {
+    err "git tidak ditemukan."
+    exit 1
+}
+
+command -v python3 >/dev/null 2>&1 || {
+    err "python3 tidak ditemukan."
+    exit 1
+}
+
+[ -x "/opt/crave/resync.sh" ] || {
+    err "/opt/crave/resync.sh tidak ditemukan."
+    exit 1
+}
 
 ok "repo tersedia."
 ok "git tersedia."
@@ -252,10 +280,12 @@ ok "Crave resync tersedia."
 
 # Disk space check
 AVAIL_GB=$(df -BG . | awk 'NR==2 {gsub("G","",$4); print $4}')
+
 if [ "${AVAIL_GB:-0}" -lt 100 ]; then
     err "Disk space kurang: ${AVAIL_GB}GB (butuh minimal 100GB)"
     exit 1
 fi
+
 ok "Disk space: ${AVAIL_GB}GB tersedia"
 
 # ============================================================
@@ -368,24 +398,35 @@ FIXED_COUNT=0
 
 # Step 1: Mesa vulkan
 info "Step 1: Cek mesa vulkan conflict..."
+
 BEFORE=$(find external/mesa/android -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
 fix_mesa_vulkan || true
 AFTER=$(find external/mesa/android -name "*.disabled" 2>/dev/null | wc -l | tr -d ' ')
-[ "${AFTER:-0}" -gt "${BEFORE:-0}" ] && FIXED_COUNT=$((FIXED_COUNT+1))
+
+[ "${AFTER:-0}" -gt "${BEFORE:-0}" ] &&
+    FIXED_COUNT=$((FIXED_COUNT+1))
+
 echo
 
 # Step 2: mk vs bp
 info "Step 2: Scan konflik mk/bp..."
+
 for d in "${DEDUP_SCAN_DIRS[@]}"; do
-    [ -d "$d" ] && { info "  Scanning: $d"; fix_mk_bp_conflict "$d" || true; }
+    [ -d "$d" ] && {
+        info "  Scanning: $d"
+        fix_mk_bp_conflict "$d" || true
+    }
 done
+
 echo
 
 # Step 3: Duplikat antar file
 info "Step 3: Scan module duplikat..."
+
 for d in "${DEDUP_SCAN_DIRS[@]}"; do
     [ -d "$d" ] && fix_duplicate_modules_in_dir "$d" || true
 done
+
 echo
 
 # Step 4: Summary
@@ -428,6 +469,7 @@ fi
 section "LOCATING BORINGSSL libcrypto_static"
 
 BORINGSSL_BP=""
+
 while IFS= read -r file; do
     if grep -qE 'name:[[:space:]]*"libcrypto_static"' "$file"; then
         BORINGSSL_BP="$file"
@@ -470,8 +512,13 @@ if not name_match:
     print("[ERROR] libcrypto_static tidak ditemukan.")
     sys.exit(1)
 
-module_pattern = re.compile(r'(?:cc_library_static|cc_library)\s*\{', re.MULTILINE)
+module_pattern = re.compile(
+    r'(?:cc_library_static|cc_library)\s*\{',
+    re.MULTILINE
+)
+
 module_start = None
+
 for match in module_pattern.finditer(content, 0, name_match.start() + 1):
     module_start = match.start()
 
@@ -480,6 +527,7 @@ if module_start is None:
     sys.exit(1)
 
 brace_start = content.find("{", module_start)
+
 if brace_start == -1:
     print("[ERROR] Opening brace tidak ditemukan.")
     sys.exit(1)
@@ -497,15 +545,22 @@ while i < len(content):
     n = content[i + 1] if i + 1 < len(content) else ""
 
     if in_line_comment:
-        if c == "\n": in_line_comment = False
+        if c == "\n":
+            in_line_comment = False
+
     elif in_block_comment:
         if c == "*" and n == "/":
             in_block_comment = False
             i += 1
+
     elif in_string:
-        if escape: escape = False
-        elif c == "\\": escape = True
-        elif c == '"': in_string = False
+        if escape:
+            escape = False
+        elif c == "\\":
+            escape = True
+        elif c == '"':
+            in_string = False
+
     else:
         if c == "/" and n == "/":
             in_line_comment = True
@@ -519,9 +574,11 @@ while i < len(content):
             depth += 1
         elif c == "}":
             depth -= 1
+
             if depth == 0:
                 module_end = i
                 break
+
     i += 1
 
 if module_end is None:
@@ -529,37 +586,74 @@ if module_end is None:
     sys.exit(1)
 
 module = content[module_start:module_end + 1]
-visibility_match = re.search(r'visibility\s*:\s*\[(.*?)\]', module, re.DOTALL)
+
+visibility_match = re.search(
+    r'visibility\s*:\s*\[(.*?)\]',
+    module,
+    re.DOTALL
+)
 
 if visibility_match:
     vis_block = visibility_match.group(1)
+
     if required_visibility in vis_block:
         print("[OK] Visibility sudah ada.")
     else:
         new_block = vis_block.rstrip()
         new_block = (new_block + "\n        ") if new_block else "\n        "
         new_block += f'"{required_visibility}",\n    '
+
         new_vis = "visibility: [" + new_block + "]"
-        module = module.replace(visibility_match.group(0), new_vis, 1)
-        content = content[:module_start] + module + content[module_end + 1:]
+
+        module = module.replace(
+            visibility_match.group(0),
+            new_vis,
+            1
+        )
+
+        content = (
+            content[:module_start]
+            + module
+            + content[module_end + 1:]
+        )
+
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+
         print("[OK] Visibility ditambahkan.")
+
 else:
-    name_field = re.search(r'(name\s*:\s*"libcrypto_static"\s*,)', module)
+    name_field = re.search(
+        r'(name\s*:\s*"libcrypto_static"\s*,)',
+        module
+    )
+
     if not name_field:
         print("[ERROR] Field name tidak ditemukan.")
         sys.exit(1)
+
     insertion = (
-        name_field.group(1) + '\n'
-        + '    visibility: [\n'
+        name_field.group(1) + "\n"
+        + "    visibility: [\n"
         + '        "' + required_visibility + '",\n'
-        + '    ],'
+        + "    ],"
     )
-    module = module[:name_field.start()] + insertion + module[name_field.end():]
-    content = content[:module_start] + module + content[module_end + 1:]
+
+    module = (
+        module[:name_field.start()]
+        + insertion
+        + module[name_field.end():]
+    )
+
+    content = (
+        content[:module_start]
+        + module
+        + content[module_end + 1:]
+    )
+
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+
     print("[OK] visibility property dibuat.")
 PY
 
@@ -619,7 +713,7 @@ MESA_MK="external/mesa/android/Android.mk"
 MESA_BP="external/mesa/android/Android.bp"
 
 if [ -f "$MESA_MK" ] && [ -f "$MESA_BP" ]; then
-    if grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$MESA_MK" 2>/dev/null && \
+    if grep -qE 'LOCAL_MODULE[[:space:]]*:?=[[:space:]]*vulkan([[:space:]]|$)' "$MESA_MK" 2>/dev/null &&
        grep -qE 'name[[:space:]]*:[[:space:]]*"vulkan"' "$MESA_BP" 2>/dev/null; then
         err "Mesa vulkan conflict MASIH ADA!"
         exit 1
@@ -629,46 +723,44 @@ fi
 ok "Tidak ada konflik duplikat."
 
 # ============================================================
-# LUNCH TARGET (INI YANG KURANG!)
+# SELECT BUILD TARGET
+# FIX: GUNAKAN BREAKFAST, JANGAN LUNCH COMBO MANUAL
 # ============================================================
 
 section "SELECTING BUILD TARGET"
 
 info "Breakfast device: $DEVICE"
-breakfast "$DEVICE" 2>&1 | tee -a "$BUILD_LOG" || warn "breakfast gagal (lanjut)"
-ok "Breakfast selesai."
 
-info "Lunch combo: $LUNCH_TARGET"
-
-if lunch "$LUNCH_TARGET" 2>&1 | tee -a "$BUILD_LOG"; then
-    ok "Lunch berhasil: $LUNCH_TARGET"
-else
-    err "Lunch gagal: $LUNCH_TARGET"
-    echo
-    echo "Coba salah satu combo berikut:"
-    echo "  - lineage_${DEVICE}-userdebug"
-    echo "  - lineage_${DEVICE}-user"
-    echo "  - lineage_${DEVICE}-eng"
-    echo "  - ${DEVICE}-userdebug"
-    echo "  - aosp_${DEVICE}-userdebug"
-    echo
-    echo "Lihat daftar: source build/envsetup.sh && print_lunch_menu"
+if ! breakfast "$DEVICE" 2>&1 | tee -a "$BUILD_LOG"; then
+    err "Breakfast gagal: $DEVICE"
     exit 1
 fi
 
+ok "Breakfast berhasil."
+
+# Ambil target yang benar-benar dipilih oleh breakfast.
+TARGET_PRODUCT="$(get_build_var TARGET_PRODUCT)"
+TARGET_DEVICE="$(get_build_var TARGET_DEVICE)"
+TARGET_ARCH="$(get_build_var TARGET_ARCH)"
+TARGET_ARCH_VARIANT="$(get_build_var TARGET_ARCH_VARIANT)"
+TARGET_BUILD_VARIANT="$(get_build_var TARGET_BUILD_VARIANT)"
+
+if [ -z "$TARGET_PRODUCT" ]; then
+    err "TARGET_PRODUCT kosong setelah breakfast."
+    exit 1
+fi
+
+# Variabel ini hanya untuk informasi output, bukan untuk menjalankan lunch.
+LUNCH_TARGET="$TARGET_PRODUCT ($TARGET_BUILD_VARIANT)"
+
 ok "Target selection selesai."
+info "Selected product: $TARGET_PRODUCT"
 
 # ============================================================
 # VERIFY TARGET
 # ============================================================
 
 section "VERIFYING BUILD TARGET"
-
-TARGET_PRODUCT="$(get_build_var TARGET_PRODUCT)"
-TARGET_DEVICE="$(get_build_var TARGET_DEVICE)"
-TARGET_ARCH="$(get_build_var TARGET_ARCH)"
-TARGET_ARCH_VARIANT="$(get_build_var TARGET_ARCH_VARIANT)"
-TARGET_BUILD_VARIANT="$(get_build_var TARGET_BUILD_VARIANT)"
 
 echo
 echo "TARGET_PRODUCT       : $TARGET_PRODUCT"
@@ -678,9 +770,23 @@ echo "TARGET_ARCH_VARIANT  : $TARGET_ARCH_VARIANT"
 echo "TARGET_BUILD_VARIANT : $TARGET_BUILD_VARIANT"
 echo
 
-[ -z "$TARGET_PRODUCT" ] && { err "TARGET_PRODUCT kosong."; exit 1; }
-[ -z "$TARGET_ARCH" ] && { err "TARGET_ARCH kosong."; exit 1; }
-[ "$TARGET_ARCH" != "arm64" ] && warn "TARGET_ARCH bukan arm64."
+[ -z "$TARGET_PRODUCT" ] && {
+    err "TARGET_PRODUCT kosong."
+    exit 1
+}
+
+[ -z "$TARGET_ARCH" ] && {
+    err "TARGET_ARCH kosong."
+    exit 1
+}
+
+[ "$TARGET_DEVICE" != "$DEVICE" ] && {
+    err "TARGET_DEVICE tidak sesuai: $TARGET_DEVICE (expected $DEVICE)"
+    exit 1
+}
+
+[ "$TARGET_ARCH" != "arm64" ] &&
+    warn "TARGET_ARCH bukan arm64."
 
 ok "Build target valid."
 
@@ -716,7 +822,8 @@ section "STARTING BUILD"
 
 echo
 echo "Building    : $BUILD_TARGET"
-echo "Lunch combo : $LUNCH_TARGET"
+echo "Product     : $TARGET_PRODUCT"
+echo "Variant     : $TARGET_BUILD_VARIANT"
 echo "Jobs        : $JOBS"
 echo "Log         : $BUILD_LOG"
 echo
@@ -726,7 +833,7 @@ BUILD_START=$(date +%s)
 MAX_RETRY=2
 BUILD_STATUS="FAILED"
 
-for attempt in $(seq 1 $MAX_RETRY); do
+for attempt in $(seq 1 "$MAX_RETRY"); do
     info "Build attempt $attempt/$MAX_RETRY..."
 
     if m -j"$JOBS" "$BUILD_TARGET" 2>&1 | tee -a "$BUILD_LOG"; then
@@ -772,7 +879,11 @@ fi
 
 section "CHECKING BUILD OUTPUT"
 
-[ ! -d "$OUT_DIR" ] && { err "Output tidak ditemukan: $OUT_DIR"; exit 1; }
+[ ! -d "$OUT_DIR" ] && {
+    err "Output tidak ditemukan: $OUT_DIR"
+    exit 1
+}
+
 ok "Output: $OUT_DIR"
 
 # ============================================================
@@ -794,7 +905,8 @@ do
     fi
 done
 
-[ "$IMAGE_FOUND" -eq 0 ] && warn "Tidak ada image di output."
+[ "$IMAGE_FOUND" -eq 0 ] &&
+    warn "Tidak ada image di output."
 
 # ============================================================
 # FINAL
@@ -812,7 +924,8 @@ echo -e "${RESET}"
 echo "ROM        : $ROM_NAME"
 echo "Device     : $DEVICE"
 echo "Target     : $BUILD_TARGET"
-echo "Lunch      : $LUNCH_TARGET"
+echo "Product    : $TARGET_PRODUCT"
+echo "Variant    : $TARGET_BUILD_VARIANT"
 echo "Output     : $OUT_DIR"
 echo "Build time : $BUILD_TIME seconds ($((BUILD_TIME/60)) min)"
 echo "Log        : $BUILD_LOG"
@@ -830,3 +943,4 @@ echo "============================================================"
 echo "                    DONE"
 echo "============================================================"
 echo
+```
